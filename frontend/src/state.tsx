@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "react-router";
 import { get, type LinkMeta, type Meta, type User } from "./api";
+import { setRateUnit } from "./format";
 
 // ---------------------------------------------------------------- session
 
@@ -15,6 +16,9 @@ interface Session {
 const SessionContext = createContext<Session | null>(null);
 
 export function SessionProvider({ user, meta, children }: { user: User; meta: Meta; children: ReactNode }) {
+  // Formatters are plain functions used everywhere (also inside chart callbacks), so the unit lives in format.ts.
+  // Set it during render so children render with the current unit on the same pass.
+  setRateUnit(meta.rate_unit);
   const value = useMemo(
     () => ({ user, meta, isAdmin: user.role === "admin", linkById: new Map(meta.links.map((l) => [l.id, l])) }),
     [user, meta],

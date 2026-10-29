@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { get, put, type Settings } from "../../api";
-import { Button, ErrorNote, Field, Input, Loading, PageHeader, Panel, Toggle } from "../../components/ui";
+import { Button, ErrorNote, Field, Input, Loading, PageHeader, Panel, Select, Toggle } from "../../components/ui";
 
 export default function SettingsGeneral() {
   const qc = useQueryClient();
@@ -53,6 +53,12 @@ export default function SettingsGeneral() {
             </Field>
             <Field label="Rows on the Top AS page" hint="Between 5 and 200.">
               <Input type="number" min={5} max={200} value={s.top_default_limit} onChange={(e) => set({ top_default_limit: num(e.target.value) })} />
+            </Field>
+            <Field label="Bandwidth unit" hint="How bit rates are written everywhere in the interface, for all users.">
+              <Select value={s.rate_unit ?? "b/s"} onChange={(e) => set({ rate_unit: e.target.value as Settings["rate_unit"] })}>
+                <option value="b/s">Mb/s (short)</option>
+                <option value="bit/s">Mbit/s (long)</option>
+              </Select>
             </Field>
           </div>
         </Panel>

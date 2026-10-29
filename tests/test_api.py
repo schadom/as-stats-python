@@ -159,3 +159,13 @@ def test_short_ranges_use_five_minute_buckets(client):
         s = client.get(f"/api/links/series?range={rng}").json()
         assert s["step"] == 300 and len(s["buckets"]) == buckets
         assert client.get(f"/api/top?range={rng}").status_code == 200
+
+
+def test_rate_unit_setting(client):
+    login(client)
+    # existing installations keep the short form
+    assert client.get("/api/meta").json()["rate_unit"] == "b/s"
+    assert client.get("/api/settings").json()["rate_unit"] == "b/s"
+    assert client.put("/api/settings", json={"rate_unit": "Mbps"}, headers=H).status_code == 422
+    assert client.put("/api/settings", json={"rate_unit": "bit/s"}, headers=H).json()["rate_unit"] == "bit/s"
+    assert client.get("/api/meta").json()["rate_unit"] == "bit/s"
