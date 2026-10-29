@@ -151,3 +151,11 @@ def test_ranges_validated(client):
     assert client.get("/api/top?range=5y").status_code == 400
     assert client.get("/api/top?start=200&end=100").status_code == 400
     assert client.get("/api/series?asns=" + ",".join(str(i) for i in range(101))).status_code == 400
+
+
+def test_short_ranges_use_five_minute_buckets(client):
+    login(client)
+    for rng, buckets in (("1h", 12), ("3h", 36)):
+        s = client.get(f"/api/links/series?range={rng}").json()
+        assert s["step"] == 300 and len(s["buckets"]) == buckets
+        assert client.get(f"/api/top?range={rng}").status_code == 200
