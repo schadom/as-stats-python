@@ -215,7 +215,7 @@ routers ──UDP──▶ collector ──▶ database ◀── web app (FastA
                                MariaDB          └─ AS names (RIPEstat), IXs (PeeringDB)
 ```
 
-The container runs two processes under supervisord: `asstats collector` decodes flows and writes aggregated counters
+The container runs two processes, started and restarted by `asstats run`: `asstats collector` decodes flows and writes aggregated counters
 every minute, `asstats web` serves the UI and API (`/api`, OpenAPI docs at `/api/docs`) and runs the background jobs.
 The collector is a single process. Decoding and aggregation run at about one million NetFlow/IPFIX flows or 300,000 sFlow samples per second on one core in benchmarks, so packet reception is usually the limit.
 

@@ -49,6 +49,7 @@ def _users(args) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="asstats", description="Per-AS traffic statistics")
     sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("run", help="run web UI and collector together (container default)")
     sub.add_parser("web", help="run the web UI/API and background jobs")
     sub.add_parser("collector", help="run the NetFlow/IPFIX/sFlow collector")
     sub.add_parser("rollup", help="run rollups and retention once")
@@ -73,6 +74,10 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("--sampling", type=int, default=1000)
 
     args = parser.parse_args(argv)
+    if args.command == "run":
+        from .launcher import run
+
+        return run()
     if args.command == "web":
         from .web.app import main as web_main
 

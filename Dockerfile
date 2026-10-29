@@ -22,10 +22,9 @@ WORKDIR /app
 COPY pyproject.toml README.md LICENSE ./
 COPY asstats ./asstats
 COPY --from=ui /ui/dist ./asstats/static
-RUN pip install . supervisor \
+RUN pip install . \
  && rm -rf /app/asstats /app/build
 
-COPY docker/supervisord.conf /etc/supervisord.conf
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh && mkdir -p /data && chown asstats:asstats /data
 
@@ -36,4 +35,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=60s \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/health', timeout=4)" || exit 1
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
-CMD ["supervisord", "-c", "/etc/supervisord.conf"]
+CMD ["asstats", "run"]
