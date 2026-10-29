@@ -59,6 +59,7 @@ IE_SAMPLING_PACKET_SPACE = 306
 V9_SCOPE_INTERFACE = 2
 
 VARLEN = 65535
+MAX_RATE = 1_000_000
 
 _WANTED = {
     IE_IN_BYTES: "bytes",
@@ -81,6 +82,28 @@ _NAMES = ("bytes", "obytes", "in_if", "out_if", "src_as", "dst_as", "src_peer", 
 
 class DecodeError(Exception):
     pass
+
+
+_IE_NAMES = {
+    1: "bytes", 2: "packets", 4: "proto", 8: "src4", 10: "in_if", 12: "dst4", 14: "out_if", 16: "src_as",
+    17: "dst_as", 23: "out_bytes", 27: "src6", 28: "dst6", 34: "sampling_interval", 48: "sampler_id",
+    49: "sampler_mode", 50: "sampler_interval", 60: "ip_version", 61: "direction", 82: "if_name",
+    83: "if_desc", 85: "total_bytes", 128: "next_as", 129: "prev_as", 302: "selector_id",
+}
+
+
+def describe_template(tpl: "Template") -> str:
+    parts = []
+    for ftype, length, ent, scope in tpl.fields:
+        if ent:
+            label = f"{ent}:{ftype}"
+        elif scope and not tpl.ipfix:
+            label = f"scope{ftype}"
+        else:
+            label = _IE_NAMES.get(ftype, str(ftype))
+        parts.append(f"{'*' if scope else ''}{label}/{'var' if length == VARLEN else length}")
+    kind = "options " if tpl.is_options else ""
+    return f"{kind}[{' '.join(parts)}]"
 
 
 class Template:
@@ -387,6 +410,16 @@ class NetflowDecoder:
         if old is None or old.fields != tpl.fields or old.is_options != tpl.is_options:
             self.templates[key] = tpl
             self.templates_dirty = True
+            ip, version, domain, tid = key
+            log.info(
+                "%s template %d from %s (%s %d): %s",
+                "learned" if old is None else "updated",
+                tid,
+                ip,
+                "IPFIX domain" if version == 10 else "NetFlow v9 source id",
+                domain,
+                describe_template(tpl),
+            )
 
     def _data_set(
         self, data: bytes, pos: int, end: int, ip: str, version: int, domain: int, tid: int, flows: list
@@ -524,6 +557,9 @@ class NetflowDecoder:
                     pkt_space = int.from_bytes(raw, "big")
             if rate is None and pkt_interval:
                 rate = max(1, round((pkt_interval + (pkt_space or 0)) / pkt_interval))
+            if rate and rate > MAX_RATE:
+                log.warning("exporter %s announced an implausible sampling rate %d in options data, ignoring it", ip, rate)
+                rate = None
             if rate:
                 if sampler is not None:
                     if self.sampler_rates.get((ip, domain, sampler)) != rate:

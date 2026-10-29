@@ -143,7 +143,7 @@ export default function SettingsExporters() {
                           {e.status.protocol === "sflow" ? "sFlow v5" : e.status.protocol === "ipfix" ? "IPFIX" : `NetFlow v${e.status.version}`}
                           <div className="text-[12.5px] text-muted num">
                             {e.status.flows_per_sec} flows/s
-                            {e.status.errors > 0 && `, ${e.status.errors} bad packets`}
+                            {e.status.errors > 0 && `, ${e.status.errors} errors`}
                           </div>
                         </>
                       ) : (

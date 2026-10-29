@@ -29,6 +29,16 @@ log = logging.getLogger(__name__)
 
 BUCKET = 300
 
+# Sanity limits. A value outside them means the exporter sent something we
+# misunderstand (or garbage); such flows are dropped with a warning instead of
+# poisoning the counters.
+MAX_RATE = 1_000_000          # 1:1,000,000 sampling
+MAX_FLOW_BYTES = 1 << 40      # 1 TiB in a single (sampled) flow record
+MAX_IFINDEX = 0xFFFFFFFF      # ifIndex is 32 bit
+MAX_ASN = 0xFFFFFFFF
+INT64_MAX = (1 << 63) - 1
+WARN_INTERVAL = 600
+
 
 @dataclass(frozen=True)
 class ExporterCfg:
@@ -70,7 +80,7 @@ class Snapshot:
         self.traffic: dict[tuple[int, int, int], list[int]] = {}
         self.links: dict[tuple[int, int], list[int]] = {}
         self.ifaces: dict[tuple[str, int], list[int]] = {}
-        # ip -> [protocol, version, packets, flows, errors]
+        # ip -> [protocol, version, packets, flows, errors, rejected]
         self.exporters: dict[str, list] = {}
         self.started = time.time()
 
@@ -94,6 +104,14 @@ class Collector:
         self.known_asns: set[int] = set()
         self.config_version = None
         self.total_flows = 0
+        self._warned: dict[tuple[str, str], float] = {}
+
+    def _warn(self, ip: str, kind: str, msg: str, *args) -> None:
+        """Log a problem with an exporter at most every WARN_INTERVAL seconds."""
+        now = time.monotonic()
+        if now - self._warned.get((ip, kind), -WARN_INTERVAL) >= WARN_INTERVAL:
+            self._warned[(ip, kind)] = now
+            log.warning("exporter %s: " + msg, ip, *args)
 
     # ------------------------------------------------------------ config
 
@@ -120,7 +138,7 @@ class Collector:
     def _exp_counters(self, ip: str, protocol: str) -> list:
         c = self.snap.exporters.get(ip)
         if c is None:
-            c = self.snap.exporters[ip] = [protocol, 0, 0, 0, 0]
+            c = self.snap.exporters[ip] = [protocol, 0, 0, 0, 0, 0]
         return c
 
     def handle_netflow(self, data: bytes, ip: str) -> None:
@@ -135,7 +153,7 @@ class Collector:
         c[0] = "ipfix" if version == 10 else "netflow"
         c[1] = version
         c[3] += len(flows)
-        self.process(ip, flows)
+        c[5] += self.process(ip, flows)
 
     def handle_sflow(self, data: bytes, ip: str) -> None:
         c = self._exp_counters(ip, "sflow")
@@ -148,12 +166,14 @@ class Collector:
             return
         c[1] = version
         c[3] += len(flows)
-        self.process(ip, flows)
+        c[5] += self.process(ip, flows)
 
-    def process(self, ip: str, flows: list[tuple]) -> None:
+    def process(self, ip: str, flows: list[tuple]) -> int:
+        """Count flows. Returns how many were rejected as implausible."""
         if not flows:
-            return
+            return 0
         self.total_flows += len(flows)
+        rejected = 0
         exp = self.linkmap.exporters.get(ip)
         classify = exp is not None and exp.enabled
         exp_rate = exp.sampling_rate if exp else None
@@ -165,7 +185,25 @@ class Collector:
         links = snap.links
         bucket = int(time.time()) // BUCKET * BUCKET
 
-        for in_if, out_if, src_as, dst_as, src_peer, dst_peer, nbytes, v6, rate in flows:
+        for flow in flows:
+            in_if, out_if, src_as, dst_as, src_peer, dst_peer, nbytes, v6, rate = flow
+            if rate > MAX_RATE:
+                self._warn(ip, "rate", "ignoring implausible sampling rate %d (flow %r); set the rate on the exporter", rate, flow)
+                rate = 0
+            if (
+                nbytes > MAX_FLOW_BYTES
+                or in_if > MAX_IFINDEX
+                or out_if > MAX_IFINDEX
+                or src_as > MAX_ASN
+                or dst_as > MAX_ASN
+            ):
+                rejected += 1
+                self._warn(ip, "flow", "dropping implausible flow %r (in_if, out_if, src_as, dst_as, src_peer, dst_peer, bytes, v6, rate)", flow)
+                continue
+            if src_peer is not None and src_peer > MAX_ASN:
+                src_peer = None
+            if dst_peer is not None and dst_peer > MAX_ASN:
+                dst_peer = None
             base = exp_rate or rate or 1
             scaled = nbytes * base
             if in_if:
@@ -216,6 +254,7 @@ class Collector:
                 if c is None:
                     c = links[lkey] = [0, 0, 0, 0]
                 c[col] += b
+        return rejected
 
     # ------------------------------------------------------------ flushing
 
@@ -244,12 +283,15 @@ class Collector:
         now_i = int(now)
         window = max(1.0, now - snap.started)
 
+        def cap(v: float) -> int:
+            return min(int(v), INT64_MAX)
+
         traffic_rows = [
-            {"ts": ts, "link_id": link, "asn": asn, "in_v4": c[0], "out_v4": c[1], "in_v6": c[2], "out_v6": c[3]}
+            {"ts": ts, "link_id": link, "asn": asn, "in_v4": cap(c[0]), "out_v4": cap(c[1]), "in_v6": cap(c[2]), "out_v6": cap(c[3])}
             for (ts, link, asn), c in snap.traffic.items()
         ]
         link_rows = [
-            {"ts": ts, "link_id": link, "in_v4": c[0], "out_v4": c[1], "in_v6": c[2], "out_v6": c[3]}
+            {"ts": ts, "link_id": link, "in_v4": cap(c[0]), "out_v4": cap(c[1]), "in_v6": cap(c[2]), "out_v6": cap(c[3])}
             for (ts, link), c in snap.links.items()
         ]
         iface_rows = []
@@ -261,9 +303,9 @@ class Collector:
                     "if_name": names.pop((ip, ifindex), None),
                     "first_seen": now_i,
                     "last_seen": now_i,
-                    "bps_in": int(b_in * 8 / window),
-                    "bps_out": int(b_out * 8 / window),
-                    "flows": flows,
+                    "bps_in": cap(b_in * 8 / window),
+                    "bps_out": cap(b_out * 8 / window),
+                    "flows": cap(flows),
                 }
             )
         name_rows = [
@@ -278,15 +320,18 @@ class Collector:
                 "flows": 0,
             }
             for (ip, ifindex), name in names.items()
+            if 0 < ifindex <= MAX_IFINDEX
         ]
         status_rows = []
-        for ip, (protocol, version, packets, flows, errors) in snap.exporters.items():
+        for ip, (protocol, version, packets, flows, errors, rejected) in snap.exporters.items():
             if protocol == "sflow":
                 reported = self.sflow.last_rate.get(ip)
                 templates = None
             else:
                 reported = self.netflow.reported_rate(ip)
                 templates = self.netflow.template_count(ip)
+            if reported is not None and not 0 < reported <= MAX_RATE:
+                reported = None
             status_rows.append(
                 {
                     "ip": ip,
@@ -295,7 +340,7 @@ class Collector:
                     "last_seen": now_i,
                     "packets": packets,
                     "flows": flows,
-                    "errors": errors,
+                    "errors": errors + rejected,
                     "flows_per_sec": int(flows / window),
                     "reported_sampling": reported,
                     "templates": templates,

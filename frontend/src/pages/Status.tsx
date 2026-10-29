@@ -60,7 +60,7 @@ export default function Status() {
                   <th className={th}>Protocol</th>
                   <th className={`${th} text-right`}>Flows/s</th>
                   <th className={`${th} text-right`}>Packets</th>
-                  <th className={`${th} text-right`}>Bad packets</th>
+                  <th className={`${th} text-right`} title="Undecodable packets plus flows dropped as implausible">Errors</th>
                   <th className={th}>Announced sampling</th>
                   <th className={th}>Last seen</th>
                 </tr>

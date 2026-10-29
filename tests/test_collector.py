@@ -109,3 +109,42 @@ def test_config_reload_picks_up_changes(engine):
         appsettings.bump_config_version(s)
     assert col.maybe_reload() is True
     assert col.linkmap.ifaces[(IP, 10)] == (transit, None)
+
+
+def _v9_custom(fields, records, source_id=1):
+    """v9 packet with one template (id 300) and data records given as value lists."""
+    import struct
+
+    tpl = struct.pack("!HH", 300, len(fields)) + b"".join(struct.pack("!HH", t, l) for t, l in fields)
+    data = b"".join(b"".join(v.to_bytes(l, "big") for v, (_, l) in zip(rec, fields)) for rec in records)
+    sets = struct.pack("!HH", 0, 4 + len(tpl)) + tpl + struct.pack("!HH", 300, 4 + len(data)) + data
+    return struct.pack("!HHIIII", 9, 1 + len(records), 0, 0, 0, source_id) + sets
+
+
+def test_implausible_values_do_not_break_the_flush(engine, caplog):
+    transit, _ = setup_links()
+    col = Collector(engine)
+    col.maybe_reload(force=True)
+    # in_if, out_if, src_as, dst_as, bytes, sampling interval (all 8 bytes wide on purpose)
+    fields = [(10, 8), (14, 8), (16, 4), (17, 4), (1, 8), (34, 4)]
+    pkt = _v9_custom(
+        fields,
+        [
+            [2**64 - 1, 99, 15169, 0, 1000, 0],  # garbage ifIndex -> dropped
+            [10, 99, 15169, 0, 2**62, 0],  # absurd byte count -> dropped
+            [10, 99, 13335, 0, 500, 2**32 - 1],  # absurd sampling rate -> ignored, counted 1:1
+            [10, 99, 2906, 0, 100, 0],  # normal
+        ],
+    )
+    with caplog.at_level("INFO"):
+        col.handle_netflow(pkt, IP)
+        col.flush(*col.take_snapshot())
+    rows = traffic_rows(engine)
+    assert rows == {(transit, 13335): (500, 0, 0, 0), (transit, 2906): (100, 0, 0, 0)}
+    with engine.connect() as conn:
+        status = conn.execute(select(ExporterStatus)).one()
+        assert status.errors == 2
+        assert {r.ifindex for r in conn.execute(select(DiscoveredInterface))} == {10, 99}
+    text = caplog.text
+    assert "learned template 300 from 192.0.2.1 (NetFlow v9 source id 1): [in_if/8 out_if/8 src_as/4 dst_as/4 bytes/8 sampling_interval/4]" in text
+    assert "implausible sampling rate" in text and "dropping implausible flow" in text

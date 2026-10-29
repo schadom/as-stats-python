@@ -8,6 +8,8 @@ import signal
 import socket
 from typing import Callable
 
+from sqlalchemy.exc import InterfaceError, OperationalError
+
 from ..config import get_config
 from ..db import get_engine, init_db
 from .core import Collector, normalize_ip
@@ -99,9 +101,13 @@ async def run() -> None:
             snap, names = collector.take_snapshot()
             try:
                 await asyncio.to_thread(collector.flush, snap, names)
-            except Exception:
+            except (OperationalError, InterfaceError):
+                # database unreachable, locked or restarting: keep the data and retry
                 log.exception("flush failed, will retry with the next flush")
                 collector.restore(snap)
+            except Exception:
+                # anything else would fail again with the same data; drop this batch
+                log.exception("flush failed, dropping %d counters of this interval", len(snap.traffic))
 
     async def flush_loop() -> None:
         while not stop.is_set():
