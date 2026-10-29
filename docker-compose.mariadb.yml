@@ -1,0 +1,42 @@
+# AS-Stats with a MariaDB database:
+#   docker compose -f docker-compose.mariadb.yml up -d
+# Change the passwords below before the first start.
+services:
+  asstats:
+    build: .
+    image: as-stats-python:latest
+    restart: unless-stopped
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+      - "9000:9000/udp"
+      - "6343:6343/udp"
+    volumes:
+      - asstats-data:/data
+    environment:
+      TZ: Europe/Vienna
+      ASSTATS_DATABASE_URL: mysql+pymysql://asstats:asstats-db-password@mariadb:3306/asstats?charset=utf8mb4
+      # ASSTATS_ADMIN_PASSWORD: change-me
+
+  mariadb:
+    image: mariadb:11
+    restart: unless-stopped
+    environment:
+      MARIADB_DATABASE: asstats
+      MARIADB_USER: asstats
+      MARIADB_PASSWORD: asstats-db-password
+      MARIADB_ROOT_PASSWORD: asstats-root-password
+    command: ["--innodb-buffer-pool-size=512M", "--max-connections=100"]
+    volumes:
+      - mariadb-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  asstats-data:
+  mariadb-data:

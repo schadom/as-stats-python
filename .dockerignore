@@ -1,0 +1,13 @@
+.git
+**/node_modules
+**/__pycache__
+asstats/static
+data
+*.db
+*.db-*
+.venv
+venv
+build
+dist
+*.egg-info
+.pytest_cache
