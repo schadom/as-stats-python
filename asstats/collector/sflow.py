@@ -2,7 +2,8 @@
 
 Produces the same flow tuples as the NetFlow decoder:
 
-    (in_if, out_if, src_as, dst_as, src_peer_as, dst_peer_as, bytes, is_v6, sampling_rate)
+    (in_if, out_if, src_as, dst_as, src_peer_as, dst_peer_as, bytes, is_v6, sampling_rate,
+     src_addr, dst_addr)
 
 `bytes` is the sampled frame length; the collector multiplies by the rate.
 """
@@ -37,12 +38,26 @@ def _addr_len(addr_type: int) -> int:
     raise DecodeError(f"unknown sFlow address type {addr_type}")
 
 
-def _ip_version_from_header(protocol: int, header: bytes) -> bool | None:
-    """True for IPv6, False for IPv4, None if unknown."""
-    if protocol == 11:
-        return False
-    if protocol == 12:
-        return True
+def _ip_from_l3(ip_hdr: bytes) -> tuple[bool, int | bytes | None, int | bytes | None] | None:
+    """(is_v6, src, dst) from the start of an IP header."""
+    if not ip_hdr:
+        return None
+    version = ip_hdr[0] >> 4
+    if version == 4:
+        if len(ip_hdr) >= 20:
+            return False, int.from_bytes(ip_hdr[12:16], "big"), int.from_bytes(ip_hdr[16:20], "big")
+        return False, None, None
+    if version == 6:
+        if len(ip_hdr) >= 40:
+            return True, bytes(ip_hdr[8:24]), bytes(ip_hdr[24:40])
+        return True, None, None
+    return None
+
+
+def _ip_from_header(protocol: int, header: bytes):
+    """(is_v6, src, dst) of a sampled packet header, or None if it is not IP."""
+    if protocol in (11, 12):  # header starts at the IP header
+        return _ip_from_l3(header)
     if protocol != 1 or len(header) < 14:  # ethernet
         return None
     pos = 12
@@ -50,24 +65,17 @@ def _ip_version_from_header(protocol: int, header: bytes) -> bool | None:
     while ethertype in ETH_VLAN and len(header) >= pos + 6:
         pos += 4
         ethertype = int.from_bytes(header[pos : pos + 2], "big")
-    if ethertype == ETH_IPV4:
-        return False
-    if ethertype == ETH_IPV6:
-        return True
+    pos += 2
+    if ethertype in (ETH_IPV4, ETH_IPV6):
+        return _ip_from_l3(header[pos:])
     if ethertype in ETH_MPLS:
-        pos += 2
         # walk the label stack, then guess from the IP version nibble
         while pos + 4 <= len(header):
             label = int.from_bytes(header[pos : pos + 4], "big")
             pos += 4
             if label & 0x100:  # bottom of stack
                 break
-        if pos < len(header):
-            nibble = header[pos] >> 4
-            if nibble == 4:
-                return False
-            if nibble == 6:
-                return True
+        return _ip_from_l3(header[pos:])
     return None
 
 
@@ -133,6 +141,7 @@ class SflowDecoder:
     def _flow_records(self, data: bytes, pos: int, end: int, nrec: int, in_if: int, out_if: int, rate: int):
         frame_len = None
         is_v6: bool | None = None
+        src_addr = dst_addr = None
         gateway = None
         for _ in range(nrec):
             if pos + 8 > end:
@@ -151,15 +160,17 @@ class SflowDecoder:
                 frame_len = _u32(data, body + 4)
                 header_len = _u32(data, body + 12)
                 header = data[body + 16 : body + 16 + header_len]
-                version = _ip_version_from_header(protocol, header)
-                if version is not None:
-                    is_v6 = version
-            elif fmt_id == 3:  # sampled IPv4
+                info = _ip_from_header(protocol, header)
+                if info is not None:
+                    is_v6, src_addr, dst_addr = info
+            elif fmt_id == 3:  # sampled IPv4: length, protocol, src, dst, ...
                 frame_len = frame_len or _u32(data, body)
                 is_v6 = False
-            elif fmt_id == 4:  # sampled IPv6
+                src_addr, dst_addr = _u32(data, body + 8), _u32(data, body + 12)
+            elif fmt_id == 4:  # sampled IPv6: length, protocol, src, dst, ...
                 frame_len = frame_len or _u32(data, body)
                 is_v6 = True
+                src_addr, dst_addr = bytes(data[body + 8 : body + 24]), bytes(data[body + 24 : body + 40])
             elif fmt_id == 1003:  # extended gateway
                 gateway = self._gateway(data, body, pos)
         if frame_len is None:
@@ -175,7 +186,7 @@ class SflowDecoder:
             src_peer_as = src_peer or router_as
             dst_peer_as = path[0] if path else router_as
             src_as, dst_as, src_peer, dst_peer = src_origin, dst_origin, src_peer_as, dst_peer_as
-        return (in_if, out_if, src_as, dst_as, src_peer, dst_peer, frame_len, bool(is_v6), rate)
+        return (in_if, out_if, src_as, dst_as, src_peer, dst_peer, frame_len, bool(is_v6), rate, src_addr, dst_addr)
 
     @staticmethod
     def _gateway(data: bytes, pos: int, end: int):

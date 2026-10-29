@@ -10,7 +10,8 @@ from typing import Awaitable, Callable
 from sqlalchemy.engine import Engine
 
 from .. import appsettings
-from . import asnames, peeringdb
+from ..config import get_config
+from . import asnames, ipasn_sync, peeringdb
 from .rollup import apply_retention, run_rollups
 
 log = logging.getLogger(__name__)
@@ -33,6 +34,7 @@ class Scheduler:
             asyncio.create_task(self._every("retention", 3600, 60, self._retention)),
             asyncio.create_task(self._every("asnames", 30, 10, self._asnames, self.names_now)),
             asyncio.create_task(self._every("peeringdb", 300, 20, self._peeringdb, self.pdb_now)),
+            asyncio.create_task(self._every("ipasn", 600, 3, self._ipasn)),
         ]
 
     async def stop(self) -> None:
@@ -65,6 +67,9 @@ class Scheduler:
                 except asyncio.TimeoutError:
                     pass
                 wake.clear()
+
+    async def _ipasn(self) -> None:
+        await ipasn_sync.refresh(self.engine, get_config().data_dir)
 
     async def _rollup(self) -> None:
         await asyncio.to_thread(run_rollups, self.engine)

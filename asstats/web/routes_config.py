@@ -73,6 +73,8 @@ class SettingsIn(BaseModel):
     peeringdb_enabled: bool | None = None
     peeringdb_api_key: str | None = Field(default=None, max_length=128)
     top_default_limit: int | None = Field(default=None, ge=5, le=200)
+    ipasn_enabled: bool | None = None
+    ipasn_url: str | None = Field(default=None, max_length=512, pattern=r"^https?://")
 
 
 @router.put("/settings")
@@ -99,6 +101,7 @@ class ExporterIn(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     sampling_rate: int | None = Field(default=None, ge=1, le=10_000_000)
     as_mode: str = Field(default="origin", pattern="^(origin|peer)$")
+    as_source: str = Field(default="auto", pattern="^(auto|router|lookup)$")
     enabled: bool = True
 
     @field_validator("ip")
@@ -117,6 +120,7 @@ def exporter_out(e: Exporter) -> dict:
         "name": e.name,
         "sampling_rate": e.sampling_rate,
         "as_mode": e.as_mode,
+        "as_source": e.as_source,
         "enabled": e.enabled,
     }
 
@@ -421,7 +425,15 @@ def status(request: Request, _: User = Depends(current_user), db: Session = Depe
         rows.append(item)
     values = appsettings.get_many(
         db,
-        [appsettings.COLLECTOR_HEARTBEAT, appsettings.PDB_LAST_REFRESH, appsettings.PDB_LAST_ERROR],
+        [
+            appsettings.COLLECTOR_HEARTBEAT,
+            appsettings.PDB_LAST_REFRESH,
+            appsettings.PDB_LAST_ERROR,
+            appsettings.IPASN_LAST_REFRESH,
+            appsettings.IPASN_LAST_ERROR,
+            appsettings.IPASN_RANGES,
+            "ipasn_enabled",
+        ],
     )
     sched = getattr(request.app.state, "scheduler", None)
     pending_names = db.execute(select(func.count()).select_from(AsInfo).where(AsInfo.updated_at == 0)).scalar_one()
@@ -435,7 +447,25 @@ def status(request: Request, _: User = Depends(current_user), db: Session = Depe
             "last_refresh": values[appsettings.PDB_LAST_REFRESH],
             "last_error": values[appsettings.PDB_LAST_ERROR],
         },
+        "ipasn": {
+            "enabled": values["ipasn_enabled"],
+            "last_refresh": values[appsettings.IPASN_LAST_REFRESH],
+            "last_error": values[appsettings.IPASN_LAST_ERROR],
+            "ranges": values[appsettings.IPASN_RANGES],
+        },
         "asnames_pending": pending_names,
         "jobs": sched.last_run if sched else {},
         "now": int(time.time()),
     }
+
+
+@router.post("/ipasn/refresh")
+async def ipasn_refresh(_: User = Depends(require_admin)):
+    from ..config import get_config
+    from ..db import get_engine
+    from ..services import ipasn_sync
+
+    try:
+        return await ipasn_sync.refresh(get_engine(), get_config().data_dir, force=True)
+    except Exception as exc:
+        raise HTTPException(502, f"download failed: {exc}") from exc

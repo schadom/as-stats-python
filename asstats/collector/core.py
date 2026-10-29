@@ -22,6 +22,8 @@ from ..models import (
     Link,
     LinkInterface,
 )
+from ..ipasn import FILENAME as IPASN_FILE
+from ..ipasn import IpAsnTable, load_binary
 from .netflow import DecodeError, NetflowDecoder
 from .sflow import SflowDecoder
 
@@ -38,6 +40,7 @@ MAX_IFINDEX = 0xFFFFFFFF      # ifIndex is 32 bit
 MAX_ASN = 0xFFFFFFFF
 INT64_MAX = (1 << 63) - 1
 WARN_INTERVAL = 600
+ASN_CACHE_SIZE = 500_000
 
 
 @dataclass(frozen=True)
@@ -46,6 +49,7 @@ class ExporterCfg:
     sampling_rate: int | None
     peer_mode: bool
     enabled: bool
+    as_source: str = "auto"
 
 
 @dataclass
@@ -58,8 +62,12 @@ class LinkMap:
 def load_linkmap(engine: Engine) -> LinkMap:
     lm = LinkMap()
     with engine.connect() as conn:
-        for row in conn.execute(select(Exporter.id, Exporter.ip, Exporter.sampling_rate, Exporter.as_mode, Exporter.enabled)):
-            lm.exporters[row.ip] = ExporterCfg(row.id, row.sampling_rate or None, row.as_mode == "peer", bool(row.enabled))
+        for row in conn.execute(
+            select(Exporter.id, Exporter.ip, Exporter.sampling_rate, Exporter.as_mode, Exporter.enabled, Exporter.as_source)
+        ):
+            lm.exporters[row.ip] = ExporterCfg(
+                row.id, row.sampling_rate or None, row.as_mode == "peer", bool(row.enabled), row.as_source or "auto"
+            )
         q = (
             select(Exporter.ip, LinkInterface.ifindex, LinkInterface.link_id, LinkInterface.sampling_rate)
             .join(Exporter, Exporter.id == LinkInterface.exporter_id)
@@ -96,6 +104,9 @@ def normalize_ip(addr: str) -> str:
 class Collector:
     def __init__(self, engine: Engine, data_dir: Path | None = None):
         self.engine = engine
+        self.data_dir = data_dir
+        self.ipasn: IpAsnTable | None = None
+        self._asn_cache: dict[int | bytes, int] = {}
         template_file = (data_dir / "templates.json") if data_dir else None
         self.netflow = NetflowDecoder(template_file)
         self.sflow = SflowDecoder()
@@ -132,6 +143,38 @@ class Collector:
             len(self.linkmap.ifaces),
         )
         return True
+
+    def maybe_load_ipasn(self) -> bool:
+        """(Re)load the IP-to-AS table when the web process stored a new one."""
+        if self.data_dir is None:
+            return False
+        path = self.data_dir / IPASN_FILE
+        try:
+            mtime = path.stat().st_mtime
+        except FileNotFoundError:
+            return False
+        if self.ipasn is not None and self.ipasn.mtime == mtime:
+            return False
+        try:
+            table = load_binary(path)
+        except Exception:
+            log.exception("could not load the IP-to-AS table %s", path)
+            return False
+        self.ipasn = table
+        self._asn_cache = {}
+        return True
+
+    def lookup_asn(self, v6: bool, addr: int | bytes | None) -> int:
+        if addr is None or self.ipasn is None:
+            return 0
+        cache = self._asn_cache
+        asn = cache.get(addr)
+        if asn is None:
+            asn = self.ipasn.lookup_v6(addr) if v6 else self.ipasn.lookup_v4(addr)  # type: ignore[arg-type]
+            if len(cache) >= ASN_CACHE_SIZE:
+                cache.clear()
+            cache[addr] = asn
+        return asn
 
     # ------------------------------------------------------------ packets
 
@@ -178,6 +221,10 @@ class Collector:
         classify = exp is not None and exp.enabled
         exp_rate = exp.sampling_rate if exp else None
         peer_mode = exp.peer_mode if exp else False
+        as_source = exp.as_source if exp else "auto"
+        lookup_all = as_source == "lookup" and self.ipasn is not None
+        lookup_missing = as_source == "auto" and self.ipasn is not None
+        lookup = self.lookup_asn
         ifmap = self.linkmap.ifaces
         snap = self.snap
         ifaces = snap.ifaces
@@ -186,7 +233,7 @@ class Collector:
         bucket = int(time.time()) // BUCKET * BUCKET
 
         for flow in flows:
-            in_if, out_if, src_as, dst_as, src_peer, dst_peer, nbytes, v6, rate = flow
+            in_if, out_if, src_as, dst_as, src_peer, dst_peer, nbytes, v6, rate, src_addr, dst_addr = flow
             if rate > MAX_RATE:
                 self._warn(ip, "rate", "ignoring implausible sampling rate %d (flow %r); set the rate on the exporter", rate, flow)
                 rate = 0
@@ -226,6 +273,8 @@ class Collector:
                 link_id, override = hit
                 b = nbytes * override if override else scaled
                 asn = src_peer if (peer_mode and src_peer is not None) else src_as
+                if lookup_all or (lookup_missing and not asn):
+                    asn = lookup(v6, src_addr) or asn
                 col = 2 if v6 else 0
                 key = (bucket, link_id, asn)
                 c = traffic.get(key)
@@ -243,6 +292,8 @@ class Collector:
                 link_id, override = hit
                 b = nbytes * override if override else scaled
                 asn = dst_peer if (peer_mode and dst_peer is not None) else dst_as
+                if lookup_all or (lookup_missing and not asn):
+                    asn = lookup(v6, dst_addr) or asn
                 col = 3 if v6 else 1
                 key = (bucket, link_id, asn)
                 c = traffic.get(key)
@@ -378,6 +429,8 @@ class Collector:
                     "flows_per_sec": int(sum(r["flows"] for r in status_rows) / window),
                     "exporters": len(status_rows),
                     "missing_template": self.netflow.missing_template,
+                    "ipasn_ranges": len(self.ipasn) if self.ipasn is not None else 0,
+                    "ipasn_mtime": int(self.ipasn.mtime) if self.ipasn is not None else None,
                 },
             )
         self.known_asns |= new_asns

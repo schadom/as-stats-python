@@ -11,7 +11,8 @@ receive how much traffic over which of my links?
 
 ## Features
 
-- **Collector** for NetFlow v5, NetFlow v9, IPFIX and sFlow v5, using the AS numbers your routers export.
+- **Collector** for NetFlow v5, NetFlow v9, IPFIX and sFlow v5. It uses the AS numbers your routers export, and looks
+  them up by IP address for routers that send none (VyOS, MikroTik, Linux, most switches).
   Sampling rates announced by the router (v9/IPFIX options, sFlow) are applied automatically, or set per exporter or interface.
 - **Configured entirely in the web UI.** No `knownlinks` file: the collector lists every interface it sees, with name and current rate,
   and you turn one into a link with a click. Changes are picked up within seconds, without a restart.
@@ -37,6 +38,7 @@ docker compose up -d
 docker compose logs asstats | grep -A1 "initial admin"
 ```
 
+The compose file uses host networking (Linux), see [Keep the router's source address](#keep-the-routers-source-address).
 Open <http://your-host:8080>, log in as `admin` with the password from the log, and choose a new one.
 To set the first password yourself, set `ASSTATS_ADMIN_PASSWORD` before the first start.
 
@@ -64,13 +66,23 @@ other tools should query the data.
 
 ### Keep the router's source address
 
-The exporter is identified by the source IP of the flow packets. Docker's default port publishing usually keeps it.
-If your setup rewrites it (check the source addresses on the Collector status page, e.g. with some overlay networks), run the container with `network_mode: host`.
+Exporters are identified by the source address of their flow packets. With published ports (`-p 9000:9000/udp`),
+Docker often rewrites that address to its own gateway (`172.17.0.1`). All routers then look like one exporter, their
+NetFlow templates overwrite each other, and the flows are decoded wrongly. The UI warns when it sees flows from a Docker
+gateway address.
+
+Use host networking instead, which `docker-compose.yml` does by default. With `docker run`:
+
+```sh
+docker run -d --name asstats --network host \
+  -e ASSTATS_WEB_PORT=8080 -e ASSTATS_NETFLOW_PORT=9000 -e ASSTATS_SFLOW_PORT=6343 \
+  -v asstats-data:/data --restart unless-stopped as-stats-python
+```
 
 ## Router configuration
 
-The routers must put AS numbers into the flows (BGP source and destination AS). Choose origin AS (default) or neighbor AS,
-see [How traffic is counted](#how-traffic-is-counted).
+Routers that know BGP can put the source and destination AS into the flows. Routers that can't are fine too: the
+collector then looks up the AS for each address, see [How traffic is counted](#how-traffic-is-counted).
 
 **Juniper (inline IPFIX)**
 
@@ -140,7 +152,21 @@ interface TenGigabitEthernet0/0/0
 
 `option interface-table` gives the UI interface names, `option sampler-table` the sampling rate.
 
-**sFlow**: export to UDP 6343 with the extended gateway (BGP) data enabled. The sampling rate is taken from the samples.
+**VyOS** (no AS numbers in the flows, the collector looks them up):
+
+```
+set system flow-accounting interface eth0
+set system flow-accounting netflow version 9
+set system flow-accounting netflow server 192.0.2.10 port 9000
+set system flow-accounting netflow source-ip 192.0.2.1
+set system flow-accounting netflow sampling-rate 100
+```
+
+VyOS does not announce its sampling rate, so enter the same rate on the exporter in the UI. Give each router its own
+`source-ip` so they can be told apart.
+
+**sFlow**: export to UDP 6343, with the extended gateway (BGP) data where available. The sampling rate is taken from the
+samples. Without gateway data, AS numbers are looked up from the sampled packet headers.
 
 ### Which interfaces to monitor
 
@@ -158,9 +184,19 @@ For every flow:
 Bytes are multiplied by the sampling rate. The rate comes from, in order: the interface override on the link, the exporter
 setting, the rate the router announces, or 1.
 
+Where the AS numbers come from is set per exporter:
+
+- **From the router, else IP lookup** (default): the AS numbers in the flow are used. When a flow carries none (AS 0,
+  or no AS fields at all), the AS announcing the address is looked up.
+- **From the router only**: never look up. Flows without AS numbers count as "Unknown / local".
+- **IP lookup only**: always look up, ignoring what the router sends.
+
+The lookup uses the [iptoasn.com](https://iptoasn.com) dataset (public domain), downloaded once a day into the data
+directory. The source can be changed under **General**; the Collector status page shows how many ranges are loaded.
+Addresses nobody announces (private ranges, for example) count as "Unknown / local".
+
 With **neighbor AS** mode the adjacent AS fields are used where the exporter sends them (IPFIX elements 128/129,
-the sFlow extended gateway path). Flows that carry AS 0 (often traffic from or to your own prefixes) are shown as
-"Unknown / local".
+the sFlow extended gateway path). The IP lookup always yields the origin AS.
 
 Traffic is stored in 5 minute buckets by arrival time. Completed hours and days are rolled up into hourly and daily
 tables, and queries combine them automatically. Default retention: 3 days at 5 minutes, 90 days hourly, 5 years daily,
@@ -212,7 +248,8 @@ docker compose exec asstats asstats user reset-password admin
 ```
 routers ──UDP──▶ collector ──▶ database ◀── web app (FastAPI + React UI)
                 (asyncio)     SQLite or         │  scheduler: rollups, retention,
-                               MariaDB          └─ AS names (RIPEstat), IXs (PeeringDB)
+                    ▲          MariaDB          │  AS names (RIPEstat), IXs (PeeringDB),
+                    └──── IP-to-AS table ◀──────┘  IP-to-AS dataset (iptoasn.com)
 ```
 
 The container runs two processes, started and restarted by `asstats run`: `asstats collector` decodes flows and writes aggregated counters
@@ -229,6 +266,7 @@ pytest                                   # ASSTATS_TEST_DATABASE_URL=... to test
 ASSTATS_DATA_DIR=./data asstats web &    # API on :8080
 ASSTATS_DATA_DIR=./data asstats collector &
 asstats flowgen 127.0.0.1 --protocol ipfix   # synthetic flows on ifIndex 1-3 (links) and 100-101
+asstats flowgen 127.0.0.1 --protocol v9 --no-as   # like VyOS: addresses only, AS looked up
 
 cd frontend && npm install && npm run dev  # UI on :5173, proxies /api to :8080
 npm run build                              # builds into asstats/static

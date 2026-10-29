@@ -25,6 +25,8 @@ DEFAULTS: dict[str, Any] = {
     "peeringdb_enabled": True,
     "peeringdb_api_key": "",
     "top_default_limit": 20,
+    "ipasn_enabled": True,
+    "ipasn_url": "https://iptoasn.com/data/ip2asn-combined.tsv.gz",
 }
 
 SECRET_KEYS = {"peeringdb_api_key"}
@@ -35,6 +37,10 @@ COLLECTOR_HEARTBEAT = "collector_heartbeat"
 PDB_LAST_REFRESH = "pdb_last_refresh"
 PDB_LAST_ERROR = "pdb_last_error"
 PDB_LAST_ATTEMPT = "pdb_last_attempt"
+IPASN_LAST_REFRESH = "ipasn_last_refresh"
+IPASN_LAST_ATTEMPT = "ipasn_last_attempt"
+IPASN_LAST_ERROR = "ipasn_last_error"
+IPASN_RANGES = "ipasn_ranges"
 
 
 def rollup_key(step: int) -> str:

@@ -1,14 +1,35 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { del, get, post, put, type Exporter, type Status } from "../../api";
+import { del, get, post, put, type AsSource, type Exporter, type Status } from "../../api";
 import { Badge, Button, Empty, ErrorNote, Field, Input, Loading, Modal, PageHeader, Panel, Select, Toggle, td, th } from "../../components/ui";
 import { ago } from "../../format";
 
 type Draft = Partial<Omit<Exporter, "status">>;
 
+export const AS_SOURCE_LABEL: Record<AsSource, string> = {
+  auto: "From the router, else IP lookup",
+  router: "From the router only",
+  lookup: "IP lookup only",
+};
+
+/** Docker's bridge gateways: flows seen from here had their source address rewritten. */
+export function isDockerGateway(ip: string): boolean {
+  return /^172\.(1[6-9]|2\d|3[01])\.0\.1$/.test(ip);
+}
+
+export function DockerGatewayNote() {
+  return (
+    <div className="rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-[13px] text-ink-2">
+      This is Docker's internal gateway, not a router. Docker rewrote the source address of the incoming flows, so all
+      routers look like one exporter and their templates get mixed up. Run the container with host networking
+      (<code>--network host</code>), then add the routers under their real addresses.
+    </div>
+  );
+}
+
 export function ExporterModal({ initial, onClose }: { initial: Draft; onClose: () => void }) {
   const qc = useQueryClient();
-  const [d, setD] = useState<Draft>({ name: "", as_mode: "origin", enabled: true, sampling_rate: null, ...initial });
+  const [d, setD] = useState<Draft>({ name: "", as_mode: "origin", as_source: "auto", enabled: true, sampling_rate: null, ...initial });
   const save = useMutation({
     mutationFn: () => {
       const body = {
@@ -16,6 +37,7 @@ export function ExporterModal({ initial, onClose }: { initial: Draft; onClose: (
         name: (d.name ?? "").trim() || (d.ip ?? "").trim(),
         sampling_rate: d.sampling_rate || null,
         as_mode: d.as_mode,
+        as_source: d.as_source,
         enabled: d.enabled,
       };
       return d.id ? put(`/exporters/${d.id}`, body) : post("/exporters", body);
@@ -45,6 +67,7 @@ export function ExporterModal({ initial, onClose }: { initial: Draft; onClose: (
         <Field label="Source IP address" hint="The address flow packets arrive from, as shown on the collector status page.">
           <Input value={d.ip ?? ""} onChange={(e) => setD({ ...d, ip: e.target.value })} autoFocus={!d.ip} />
         </Field>
+        {d.ip && isDockerGateway(d.ip.trim()) && <DockerGatewayNote />}
         <Field label="Name">
           <Input value={d.name ?? ""} onChange={(e) => setD({ ...d, name: e.target.value })} placeholder="edge1.vie" autoFocus={!!d.ip} />
         </Field>
@@ -60,7 +83,17 @@ export function ExporterModal({ initial, onClose }: { initial: Draft; onClose: (
             onChange={(e) => setD({ ...d, sampling_rate: e.target.value ? Number(e.target.value) : null })}
           />
         </Field>
-        <Field label="AS numbers to count" hint="Neighbor AS needs the router to export BGP adjacent AS fields (IPFIX 128/129, sFlow extended gateway).">
+        <Field
+          label="Where AS numbers come from"
+          hint="Many routers (VyOS, MikroTik, Linux) and most switches send no AS numbers. IP lookup finds the AS announcing each address, using a dataset refreshed daily."
+        >
+          <Select value={d.as_source} onChange={(e) => setD({ ...d, as_source: e.target.value as AsSource })}>
+            <option value="auto">{AS_SOURCE_LABEL.auto}</option>
+            <option value="router">{AS_SOURCE_LABEL.router}</option>
+            <option value="lookup">{AS_SOURCE_LABEL.lookup}</option>
+          </Select>
+        </Field>
+        <Field label="AS numbers to count" hint="Neighbor AS needs the router to export BGP adjacent AS fields (IPFIX 128/129, sFlow extended gateway). IP lookup always finds the origin AS.">
           <Select value={d.as_mode} onChange={(e) => setD({ ...d, as_mode: e.target.value as "origin" | "peer" })}>
             <option value="origin">Origin AS (where traffic starts or ends)</option>
             <option value="peer">Neighbor AS (the next hop network)</option>
@@ -109,6 +142,7 @@ export default function SettingsExporters() {
                   </span>
                 </span>
                 <Button size="sm" variant="primary" onClick={() => setEditing({ ip: s.ip })}>Add exporter</Button>
+                {isDockerGateway(s.ip) && <div className="w-full"><DockerGatewayNote /></div>}
               </li>
             ))}
           </ul>
@@ -136,6 +170,7 @@ export default function SettingsExporters() {
                     <td className={td}>
                       <div className="font-medium">{e.name}</div>
                       <div className="text-[12.5px] text-muted num">{e.ip}</div>
+                      {isDockerGateway(e.ip) && <Badge tone="warn" title="Docker rewrote the source address, see the note when editing">Docker gateway</Badge>}
                     </td>
                     <td className={td}>
                       {e.status ? (
@@ -159,7 +194,10 @@ export default function SettingsExporters() {
                         <span className="text-warn" title="Counters are not scaled. Set a rate if the router samples.">none announced</span>
                       )}
                     </td>
-                    <td className={td}>{e.as_mode === "peer" ? "Neighbor AS" : "Origin AS"}</td>
+                    <td className={td}>
+                      {e.as_mode === "peer" ? "Neighbor AS" : "Origin AS"}
+                      <div className="text-[12.5px] text-muted">{AS_SOURCE_LABEL[e.as_source] ?? e.as_source}</div>
+                    </td>
                     <td className={td}>
                       {e.status ? ago(e.status.last_seen) : <span className="text-faint">never</span>}
                       {!e.enabled && <Badge tone="warn">Paused</Badge>}

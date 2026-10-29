@@ -1,6 +1,8 @@
 # AS-Stats with a MariaDB database:
 #   docker compose -f docker-compose.mariadb.yml up -d
 # Change the passwords below before the first start.
+# The collector uses host networking to see the routers' real addresses, so
+# MariaDB is published on localhost only.
 services:
   asstats:
     build: .
@@ -9,15 +11,15 @@ services:
     depends_on:
       mariadb:
         condition: service_healthy
-    ports:
-      - "8080:8080"
-      - "9000:9000/udp"
-      - "6343:6343/udp"
+    network_mode: host
     volumes:
       - asstats-data:/data
     environment:
       TZ: Europe/Vienna
-      ASSTATS_DATABASE_URL: mysql+pymysql://asstats:asstats-db-password@mariadb:3306/asstats?charset=utf8mb4
+      ASSTATS_WEB_PORT: "8080"
+      ASSTATS_NETFLOW_PORT: "9000"
+      ASSTATS_SFLOW_PORT: "6343"
+      ASSTATS_DATABASE_URL: mysql+pymysql://asstats:asstats-db-password@127.0.0.1:3307/asstats?charset=utf8mb4
       # ASSTATS_ADMIN_PASSWORD: change-me
 
   mariadb:
@@ -29,6 +31,8 @@ services:
       MARIADB_PASSWORD: asstats-db-password
       MARIADB_ROOT_PASSWORD: asstats-root-password
     command: ["--innodb-buffer-pool-size=512M", "--max-connections=100"]
+    ports:
+      - "127.0.0.1:3307:3306"
     volumes:
       - mariadb-data:/var/lib/mysql
     healthcheck:

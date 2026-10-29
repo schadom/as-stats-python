@@ -83,6 +83,9 @@ class Exporter(Base):
     sampling_rate: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # "origin" = origin AS (default), "peer" = neighbour AS where the exporter provides it
     as_mode: Mapped[str] = mapped_column(String(8), nullable=False, default="origin")
+    # Where AS numbers come from: "auto" = from the flow, looked up by IP when the
+    # flow has none (AS 0); "router" = only from the flow; "lookup" = always by IP
+    as_source: Mapped[str] = mapped_column(String(8), nullable=False, default="auto", server_default="auto")
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 

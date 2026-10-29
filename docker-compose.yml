@@ -1,18 +1,22 @@
 # AS-Stats with the built-in SQLite database.
 # For MariaDB use docker-compose.mariadb.yml instead.
+#
+# Host networking is used so the collector sees the real source address of
+# your routers. With published ports, Docker may rewrite it to its gateway
+# address (172.17.0.1), and all routers then look like a single exporter.
 services:
   asstats:
     build: .
     image: as-stats-python:latest
     restart: unless-stopped
-    ports:
-      - "8080:8080"        # web UI
-      - "9000:9000/udp"    # NetFlow v5/v9 and IPFIX
-      - "6343:6343/udp"    # sFlow v5
+    network_mode: host
     volumes:
       - asstats-data:/data
     environment:
       TZ: Europe/Vienna
+      ASSTATS_WEB_PORT: "8080"       # web UI
+      ASSTATS_NETFLOW_PORT: "9000"   # NetFlow v5/v9 and IPFIX (UDP)
+      ASSTATS_SFLOW_PORT: "6343"     # sFlow v5 (UDP)
       # Without a password a random one is generated and printed to the log.
       # ASSTATS_ADMIN_PASSWORD: change-me
       # Set to true when the UI is served over HTTPS (reverse proxy).

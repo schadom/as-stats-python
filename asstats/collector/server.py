@@ -72,6 +72,7 @@ async def run() -> None:
     collector = Collector(engine, cfg.data_dir)
     collector.load_known_asns()
     collector.maybe_reload(force=True)
+    collector.maybe_load_ipasn()
 
     loop = asyncio.get_running_loop()
     transports = []
@@ -125,6 +126,7 @@ async def run() -> None:
                 pass
             try:
                 await asyncio.to_thread(collector.maybe_reload)
+                await asyncio.to_thread(collector.maybe_load_ipasn)
             except Exception:
                 log.exception("config reload failed")
 

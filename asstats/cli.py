@@ -72,6 +72,7 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("--flows", type=int, default=20, help="flows per packet")
     g.add_argument("--pps", type=float, default=10, help="packets per second")
     g.add_argument("--sampling", type=int, default=1000)
+    g.add_argument("--no-as", action="store_true", help="send addresses but no AS numbers, like VyOS or MikroTik")
 
     args = parser.parse_args(argv)
     if args.command == "run":
@@ -126,7 +127,7 @@ def main(argv: list[str] | None = None) -> int:
         port = args.port or (6343 if args.protocol == "sflow" else 9000)
         links = [int(x) for x in args.links.split(",") if x]
         local = [int(x) for x in args.local.split(",") if x]
-        run(args.target, args.protocol, port, links, local, args.flows, args.pps, args.sampling)
+        run(args.target, args.protocol, port, links, local, args.flows, args.pps, args.sampling, with_as=not args.no_as)
     return 0
 
 

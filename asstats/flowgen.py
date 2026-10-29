@@ -6,6 +6,7 @@ a running collector so you can try the UI without a router.
 
 from __future__ import annotations
 
+import ipaddress
 import random
 import socket
 import struct
@@ -24,6 +25,12 @@ class Flow:
     src_peer: int | None = None
     dst_peer: int | None = None
     packets: int = 1
+    src_ip: str | None = None
+    dst_ip: str | None = None
+
+    def addr(self, which: str) -> int:
+        value = self.src_ip if which == "src" else self.dst_ip
+        return int(ipaddress.ip_address(value)) if value else 0
 
 
 # ---------------------------------------------------------------- NetFlow v5
@@ -35,8 +42,8 @@ def build_v5(flows: list[Flow], sampling: int = 0, seq: int = 0) -> bytes:
     body = b""
     for f in flows:
         body += struct.pack(
-            "!4s4s4sHHIIIIHHBBBBHHBBH",
-            bytes(4), bytes(4), bytes(4),
+            "!IIIHHIIIIHHBBBBHHBBH",
+            f.addr("src"), f.addr("dst"), 0,
             f.in_if, f.out_if, f.packets, f.bytes, 0, 0, 0, 0, 0, 0, 6, 0,
             f.src_as & 0xFFFF, f.dst_as & 0xFFFF, 0, 0, 0,
         )
@@ -66,6 +73,10 @@ def _record(fields: list[tuple[int, int]], f: Flow, sampler_id: int) -> bytes:
             48: sampler_id,
             129: f.src_peer or 0,
             128: f.dst_peer or 0,
+            8: f.addr("src"),
+            12: f.addr("dst"),
+            27: f.addr("src"),
+            28: f.addr("dst"),
         }.get(ftype, 0)
         out += value.to_bytes(length, "big")
     return out
@@ -180,8 +191,11 @@ def build_sflow(
     samples = b""
     for i, f in enumerate(flows):
         # raw packet header: ethernet + start of IP header
-        ethertype = 0x86DD if f.v6 else 0x0800
-        eth = bytes(12) + struct.pack("!H", ethertype) + (b"\x60" if f.v6 else b"\x45") + bytes(19)
+        if f.v6:
+            ip_hdr = b"\x60" + bytes(7) + f.addr("src").to_bytes(16, "big") + f.addr("dst").to_bytes(16, "big")
+        else:
+            ip_hdr = b"\x45" + bytes(11) + f.addr("src").to_bytes(4, "big") + f.addr("dst").to_bytes(4, "big")
+        eth = bytes(12) + struct.pack("!H", 0x86DD if f.v6 else 0x0800) + ip_hdr
         raw = struct.pack("!IIII", 1, f.bytes, 4, len(eth)) + eth
         records = _xdr_record(1, raw)
         # extended gateway: next hop (ipv4), as, src_as, src_peer_as, path
@@ -211,23 +225,60 @@ POPULAR_ASNS = [
 ]
 
 
-def random_flows(links: list[int], local_ifs: list[int], count: int, *, peer: bool = False) -> list[Flow]:
+# Well-known addresses and the AS announcing them (checked against iptoasn data),
+# used when simulating exporters that send no AS numbers.
+REMOTE_ADDRS = [
+    (15169, "8.8.8.8", "2001:4860:4860::8888"),
+    (13335, "1.1.1.1", "2606:4700:4700::1111"),
+    (32934, "157.240.1.35", "2a03:2880:f10d:83:face:b00c:0:25de"),
+    (54113, "151.101.1.140", None),
+    (36459, "140.82.112.3", None),
+    (19281, "9.9.9.9", "2620:fe::fe"),
+    (36692, "208.67.222.222", None),
+    (3333, "193.0.6.139", "2001:67c:2e8:22::c100:68b"),
+]
+LOCAL_V4 = "192.0.2.{}"
+LOCAL_V6 = "2001:db8::{:x}"
+
+
+def random_flows(links: list[int], local_ifs: list[int], count: int, *, peer: bool = False, with_as: bool = True) -> list[Flow]:
     flows = []
     weights = [1 / (i + 1) for i in range(len(POPULAR_ASNS))]
+    addr_weights = [1 / (i + 1) for i in range(len(REMOTE_ADDRS))]
     for _ in range(count):
-        asn = random.choices(POPULAR_ASNS, weights)[0]
         link = random.choice(links)
         local = random.choice(local_ifs)
         size = random.randint(64, 9000)
-        v6 = random.random() < 0.35
-        if random.random() < 0.7:  # inbound
-            flows.append(Flow(link, local, asn, 0, size, v6, src_peer=1299 if peer else None))
+        if with_as:
+            asn = random.choices(POPULAR_ASNS, weights)[0]
+            v6 = random.random() < 0.35
+            remote = local_ip = None
         else:
-            flows.append(Flow(local, link, 0, asn, size // 4, v6, dst_peer=1299 if peer else None))
+            # no AS numbers in the flow, like VyOS or MikroTik: only addresses
+            asn_real, v4, v6addr = random.choices(REMOTE_ADDRS, addr_weights)[0]
+            v6 = v6addr is not None and random.random() < 0.35
+            remote = v6addr if v6 else v4
+            host = random.randint(1, 250)
+            local_ip = LOCAL_V6.format(host) if v6 else LOCAL_V4.format(host)
+            asn = 0
+        if random.random() < 0.7:  # inbound
+            flows.append(Flow(link, local, asn, 0, size, v6, src_peer=1299 if peer else None, src_ip=remote, dst_ip=local_ip))
+        else:
+            flows.append(Flow(local, link, 0, asn, size // 4, v6, dst_peer=1299 if peer else None, src_ip=local_ip, dst_ip=remote))
     return flows
 
 
-def run(target: str, protocol: str, port: int, links: list[int], local_ifs: list[int], rate: int, pps: float, sampling: int) -> None:
+def run(
+    target: str,
+    protocol: str,
+    port: int,
+    links: list[int],
+    local_ifs: list[int],
+    rate: int,
+    pps: float,
+    sampling: int,
+    with_as: bool = True,
+) -> None:
     host, _, p = target.rpartition(":") if target.count(":") == 1 else (target, "", "")
     host = host or target
     port = int(p) if p else port
@@ -236,10 +287,13 @@ def run(target: str, protocol: str, port: int, links: list[int], local_ifs: list
     seq = 0
     interval = 1.0 / pps
     names = {i: f"et-0/0/{i}" for i in links + local_ifs}
-    print(f"sending {protocol} to {host}:{port}, links {links}, local {local_ifs}, ~{pps:g} packets/s (ctrl-c to stop)")
+    print(
+        f"sending {protocol} to {host}:{port}, links {links}, local {local_ifs}, ~{pps:g} packets/s"
+        f"{'' if with_as else ', without AS numbers'} (ctrl-c to stop)"
+    )
     try:
         while True:
-            flows = random_flows(links, local_ifs, rate)
+            flows = random_flows(links, local_ifs, rate, with_as=with_as)
             if protocol == "v5":
                 pkt = build_v5(flows, sampling=sampling, seq=seq)
             elif protocol == "v9":

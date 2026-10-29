@@ -101,9 +101,37 @@ def wait_for_db(timeout: float = 120.0) -> None:
             delay = min(delay * 2, 10.0)
 
 
+# Columns added after the first release: (table, column, SQL type and default).
+# create_all() only creates missing tables, so existing databases get these here.
+ADDED_COLUMNS = [
+    ("exporters", "as_source", "VARCHAR(8) NOT NULL DEFAULT 'auto'"),
+]
+
+
+def migrate(engine: Engine) -> None:
+    from sqlalchemy import inspect
+
+    insp = inspect(engine)
+    tables = set(insp.get_table_names())
+    for table, column, ddl in ADDED_COLUMNS:
+        if table not in tables:
+            continue
+        if column in {c["name"] for c in insp.get_columns(table)}:
+            continue
+        log.info("adding column %s.%s", table, column)
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+        except Exception:
+            # another process (web/collector start together) may have added it
+            if column not in {c["name"] for c in inspect(engine).get_columns(table)}:
+                raise
+
+
 def init_db() -> None:
     wait_for_db()
     Base.metadata.create_all(get_engine())
+    migrate(get_engine())
 
 
 # ---------------------------------------------------------------- dialect helpers

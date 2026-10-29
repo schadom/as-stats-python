@@ -1,4 +1,4 @@
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from asstats.collector.core import Collector
 from asstats.db import session_scope
@@ -148,3 +148,113 @@ def test_implausible_values_do_not_break_the_flush(engine, caplog):
     text = caplog.text
     assert "learned template 300 from 192.0.2.1 (NetFlow v9 source id 1): [in_if/8 out_if/8 src_as/4 dst_as/4 bytes/8 sampling_interval/4]" in text
     assert "implausible sampling rate" in text and "dropping implausible flow" in text
+
+
+# The two data templates a VyOS 2026.03 router sent (from a real log), no AS fields.
+VYOS_V4 = [(8, 4), (12, 4), (15, 4), (60, 1), (7, 2), (11, 2), (10, 2), (14, 2), (2, 4), (1, 8),
+           (22, 4), (21, 4), (4, 1), (5, 1), (80, 6), (56, 6), (256, 2), (61, 1)]
+VYOS_V6 = [(27, 16), (28, 16), (62, 16), (60, 1), (31, 3), (7, 2), (11, 2), (10, 2), (14, 2), (2, 4), (1, 8),
+           (22, 4), (21, 4), (4, 1), (5, 1), (80, 6), (56, 6), (256, 2), (61, 1)]
+
+
+def vyos_record(fields, in_if, out_if, src, dst, nbytes):
+    import ipaddress
+
+    vals = {8: src, 12: dst, 27: src, 28: dst, 10: in_if, 14: out_if, 1: nbytes, 2: 1, 60: ipaddress.ip_address(src).version}
+    out = []
+    for t, _l in fields:
+        v = vals.get(t, 0)
+        out.append(int(ipaddress.ip_address(v)) if isinstance(v, str) else v)
+    return out
+
+
+def ipasn_table(tmp_path):
+    from asstats import ipasn
+
+    lines = [
+        "1.1.1.0\t1.1.1.255\t13335\tUS\tCLOUDFLARENET",
+        "8.8.8.0\t8.8.8.255\t15169\tUS\tGOOGLE",
+        "192.0.2.0\t192.0.2.255\t64500\tAT\tMY-NET",
+        "2606:4700::\t2606:4700:ffff:ffff:ffff:ffff:ffff:ffff\t13335\tUS\tCLOUDFLARENET",
+        "2001:db8::\t2001:db8:ffff:ffff:ffff:ffff:ffff:ffff\t64500\tAT\tMY-NET",
+        "10.0.0.0\t10.255.255.255\t0\tNone\tNot routed",
+    ]
+    ipasn.save_binary(ipasn.parse_lines(lines), tmp_path / ipasn.FILENAME)
+
+
+def test_ip_lookup_for_exporters_without_as(engine, tmp_path):
+    """VyOS sends no AS numbers: the collector looks them up by address."""
+    transit, _ = setup_links()
+    ipasn_table(tmp_path)
+    col = Collector(engine, tmp_path)
+    col.maybe_reload(force=True)
+    assert col.maybe_load_ipasn() is True and col.maybe_load_ipasn() is False
+
+    pkt4 = _v9_custom(VYOS_V4, [
+        vyos_record(VYOS_V4, 10, 99, "8.8.8.8", "192.0.2.7", 1000),   # inbound from Google
+        vyos_record(VYOS_V4, 99, 10, "192.0.2.7", "1.1.1.1", 300),    # outbound to Cloudflare
+        vyos_record(VYOS_V4, 10, 99, "10.1.2.3", "192.0.2.7", 50),    # not routed -> AS 0
+    ])
+    col.handle_netflow(pkt4, IP)
+    import struct
+    # IPv6 template 301 with the 3-byte flow label field
+    tpl = struct.pack("!HH", 301, len(VYOS_V6)) + b"".join(struct.pack("!HH", t, l) for t, l in VYOS_V6)
+    rec = vyos_record(VYOS_V6, 10, 99, "2606:4700::1111", "2001:db8::7", 700)
+    data = b"".join(v.to_bytes(l, "big") for v, (_, l) in zip(rec, VYOS_V6))
+    pkt6 = struct.pack("!HHIIII", 9, 2, 0, 0, 0, 1) + struct.pack("!HH", 0, 4 + len(tpl)) + tpl + struct.pack("!HH", 301, 4 + len(data)) + data
+    col.handle_netflow(pkt6, IP)
+    col.flush(*col.take_snapshot())
+
+    assert traffic_rows(engine) == {
+        (transit, 15169): (1000, 0, 0, 0),
+        (transit, 13335): (0, 300, 700, 0),
+        (transit, 0): (50, 0, 0, 0),
+    }
+    from asstats import appsettings
+
+    with engine.connect() as conn:
+        assert appsettings.get_value(conn, appsettings.COLLECTOR_HEARTBEAT)["ipasn_ranges"] == 5
+
+
+def test_as_source_modes(engine, tmp_path):
+    from asstats import appsettings
+
+    transit, _ = setup_links()
+    ipasn_table(tmp_path)
+
+    def run(mode):
+        with session_scope() as s:
+            s.execute(update(Exporter).values(as_source=mode))
+            appsettings.bump_config_version(s)
+        with engine.begin() as conn:
+            conn.execute(TRAFFIC[300].delete())
+        col = Collector(engine, tmp_path)
+        col.maybe_reload(force=True)
+        col.maybe_load_ipasn()
+        # router says AS 2906 for 8.8.8.8 and AS 0 for 1.1.1.1
+        col.handle_netflow(build_v9([
+            Flow(10, 99, 2906, 0, 100, src_ip="8.8.8.8", dst_ip="192.0.2.1"),
+            Flow(10, 99, 0, 0, 100, src_ip="1.1.1.1", dst_ip="192.0.2.1"),
+        ]), IP)
+        col.flush(*col.take_snapshot())
+        return {asn for _link, asn in traffic_rows(engine)}
+
+    assert run("auto") == {2906, 13335}      # router value kept, missing one looked up
+    assert run("router") == {2906, 0}        # never looked up
+    assert run("lookup") == {15169, 13335}   # always looked up
+
+
+def test_migration_adds_as_source_column(tmp_path):
+    from sqlalchemy import create_engine, inspect, text
+
+    from asstats.db import migrate
+
+    eng = create_engine(f"sqlite:///{tmp_path / 'old.db'}")
+    with eng.begin() as conn:
+        conn.execute(text("CREATE TABLE exporters (id INTEGER PRIMARY KEY, ip VARCHAR(45), name VARCHAR(128))"))
+        conn.execute(text("INSERT INTO exporters (ip, name) VALUES ('192.0.2.1', 'r1')"))
+    migrate(eng)
+    migrate(eng)  # idempotent
+    assert "as_source" in {c["name"] for c in inspect(eng).get_columns("exporters")}
+    with eng.connect() as conn:
+        assert conn.execute(text("SELECT as_source FROM exporters")).scalar_one() == "auto"

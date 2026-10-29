@@ -86,6 +86,15 @@ export default function SettingsGeneral() {
           </div>
         </Panel>
 
+        <Panel title="IP-to-AS lookup">
+          <div className="grid gap-4">
+            <Toggle checked={s.ipasn_enabled} onChange={(v) => set({ ipasn_enabled: v })} label="Download the IP-to-AS dataset once a day" />
+            <Field label="Dataset URL" hint="A tab separated file of address ranges and AS numbers, gzip or plain, in the iptoasn.com format.">
+              <Input value={s.ipasn_url} onChange={(e) => set({ ipasn_url: e.target.value })} maxLength={512} />
+            </Field>
+          </div>
+        </Panel>
+
         <Panel title="PeeringDB">
           <div className="grid gap-4">
             <Toggle checked={s.peeringdb_enabled} onChange={(v) => set({ peeringdb_enabled: v })} label="Sync exchanges and members once a day" />

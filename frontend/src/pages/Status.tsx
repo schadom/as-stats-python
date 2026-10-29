@@ -1,6 +1,7 @@
-import { useQuery } from "@tanstack/react-query";
-import { get, type Status as StatusT } from "../api";
-import { Badge, Empty, ErrorNote, Loading, PageHeader, Panel, td, th } from "../components/ui";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { get, post, type Status as StatusT } from "../api";
+import { Badge, Button, Empty, ErrorNote, Loading, PageHeader, Panel, td, th } from "../components/ui";
+import { useSession } from "../state";
 import { ago, dateTime } from "../format";
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
@@ -13,7 +14,13 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 }
 
 export default function Status() {
+  const { isAdmin } = useSession();
+  const qc = useQueryClient();
   const q = useQuery({ queryKey: ["status"], queryFn: () => get<StatusT>("/status"), refetchInterval: 15_000 });
+  const download = useMutation({
+    mutationFn: () => post("/ipasn/refresh"),
+    onSettled: () => qc.invalidateQueries({ queryKey: ["status"] }),
+  });
   if (q.isLoading) return <Loading />;
   if (q.error) return <ErrorNote error={q.error} />;
   const s = q.data!;
@@ -48,6 +55,33 @@ export default function Status() {
           {s.peeringdb.last_error && <p className="mt-3 text-[13px] text-danger">{s.peeringdb.last_error}</p>}
         </Panel>
       </div>
+      <Panel
+        title="IP-to-AS lookup"
+        className="mt-5"
+        actions={
+          isAdmin ? (
+            <Button size="sm" onClick={() => download.mutate()} disabled={download.isPending}>
+              {download.isPending ? "Downloading" : "Download now"}
+            </Button>
+          ) : null
+        }
+      >
+        <p className="mb-2 text-[13px] text-muted">
+          Used for exporters that send no AS numbers. Addresses are matched against the ranges each AS announces.
+        </p>
+        <dl>
+          <Row label="Ranges loaded by the collector">
+            {hb?.ipasn_ranges ? hb.ipasn_ranges.toLocaleString() : <span className="text-warn">none yet</span>}
+          </Row>
+          <Row label="Last download">
+            {s.ipasn.enabled ? ago(s.ipasn.last_refresh, s.now) : "switched off in General settings"}
+            {s.ipasn.last_error && <Badge tone="danger" title={s.ipasn.last_error}>Failed</Badge>}
+          </Row>
+        </dl>
+        {(download.error || s.ipasn.last_error) && (
+          <p className="mt-3 text-[13px] text-danger">{download.error ? String((download.error as Error).message) : s.ipasn.last_error}</p>
+        )}
+      </Panel>
       <Panel title="Flow sources" className="mt-5" flush>
         {s.exporters.length === 0 ? (
           <Empty title="No flows received yet">Export NetFlow v5/v9 or IPFIX to UDP 9000, or sFlow to UDP 6343, on this host.</Empty>

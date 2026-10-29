@@ -163,12 +163,15 @@ export interface IxDetail {
   members: IxMember[];
 }
 
+export type AsSource = "auto" | "router" | "lookup";
+
 export interface Exporter {
   id: number;
   ip: string;
   name: string;
   sampling_rate: number | null;
   as_mode: "origin" | "peer";
+  as_source: AsSource;
   enabled: boolean;
   status: ExporterStatus | null;
 }
@@ -229,12 +232,22 @@ export interface Settings {
   peeringdb_enabled: boolean;
   peeringdb_api_key: string;
   top_default_limit: number;
+  ipasn_enabled: boolean;
+  ipasn_url: string;
 }
 
 export interface Status {
   version: string;
   database: string;
-  collector: { ts: number; flows_per_sec: number; exporters: number; missing_template: number } | null;
+  collector: {
+    ts: number;
+    flows_per_sec: number;
+    exporters: number;
+    missing_template: number;
+    ipasn_ranges?: number;
+    ipasn_mtime?: number | null;
+  } | null;
+  ipasn: { enabled: boolean; last_refresh: number | null; last_error: string | null; ranges: number | null };
   exporters: ExporterStatus[];
   rollup: Record<string, number>;
   peeringdb: { last_refresh: number | null; last_error: string | null };

@@ -7,10 +7,13 @@ compiled into a struct format so that data records are unpacked in bulk.
 Every decoded flow is a plain tuple (see FLOW_* indexes) to keep the hot path
 cheap:
 
-    (in_if, out_if, src_as, dst_as, src_peer_as, dst_peer_as, bytes, is_v6, sampling_rate)
+    (in_if, out_if, src_as, dst_as, src_peer_as, dst_peer_as, bytes, is_v6, sampling_rate,
+     src_addr, dst_addr)
 
 `src_peer_as`/`dst_peer_as` are None when the exporter does not send them,
-`sampling_rate` is 0 when the exporter did not report one.
+`sampling_rate` is 0 when the exporter did not report one. Addresses are an int
+for IPv4, 16 raw bytes for IPv6 (converted only when an AS lookup needs them),
+or None when the template has no address fields.
 """
 
 from __future__ import annotations
@@ -32,6 +35,8 @@ FLOW_DST_PEER = 5
 FLOW_BYTES = 6
 FLOW_V6 = 7
 FLOW_RATE = 8
+FLOW_SRC_ADDR = 9
+FLOW_DST_ADDR = 10
 
 # Information element numbers (identical in NetFlow v9 and IPFIX for these)
 IE_IN_BYTES = 1
@@ -75,9 +80,13 @@ _WANTED = {
     IE_SELECTOR_ID: "sampler",
     IE_SAMPLING_INTERVAL: "srate",
     IE_SAMPLER_RANDOM_INTERVAL: "srate",
+    IE_IPV4_SRC: "src4",
+    IE_IPV4_DST: "dst4",
+    IE_IPV6_SRC: "src6",
+    IE_IPV6_DST: "dst6",
 }
 _STRUCT_CODES = {1: "B", 2: "H", 4: "I", 8: "Q"}
-_NAMES = ("bytes", "obytes", "in_if", "out_if", "src_as", "dst_as", "src_peer", "dst_peer", "ipver", "sampler", "srate")
+_ADDR_CODES = {"src4": {4: "I"}, "dst4": {4: "I"}, "src6": {16: "16s"}, "dst6": {16: "16s"}}
 
 
 class DecodeError(Exception):
@@ -138,7 +147,7 @@ class Template:
         for ftype, length, ent, _scope in self.fields:
             name = _WANTED.get(ftype) if ent == 0 else None
             if name is not None and name not in self.idx:
-                code = _STRUCT_CODES.get(length)
+                code = _ADDR_CODES[name].get(length) if name in _ADDR_CODES else _STRUCT_CODES.get(length)
                 if code is None:
                     fast = False
                     fmt.append(f"{length}x")
@@ -192,7 +201,7 @@ class NetflowDecoder:
     """
 
     _V5_HEADER = struct.Struct("!HHIIIIBBH")
-    _V5_RECORD = struct.Struct("!12xHH4xI16xHH4x")
+    _V5_RECORD = struct.Struct("!II4xHH4xI16xHH4x")
     _V9_HEADER = struct.Struct("!HHIIII")
     _IPFIX_HEADER = struct.Struct("!HHIII")
 
@@ -280,8 +289,8 @@ class NetflowDecoder:
             self.default_rates[(ip, 0)] = rate
         flows = []
         append = flows.append
-        for in_if, out_if, octets, src_as, dst_as in self._V5_RECORD.iter_unpack(data[24:end]):
-            append((in_if, out_if, src_as, dst_as, None, None, octets, False, rate))
+        for src, dst, in_if, out_if, octets, src_as, dst_as in self._V5_RECORD.iter_unpack(data[24:end]):
+            append((in_if, out_if, src_as, dst_as, None, None, octets, False, rate, src, dst))
         return flows
 
     # ------------------------------------------------------------ v9
@@ -448,12 +457,17 @@ class NetflowDecoder:
                     record, pos = _parse_record_slow(tpl, data, pos, end)
                 except DecodeError:
                     break
-                values: dict[str, int] = {}
+                values: dict[str, int | bytes] = {}
                 for ftype, ent, _scope, raw in record:
                     if ent:
                         continue
                     name = _WANTED.get(ftype)
-                    if name is not None and name not in values and len(raw) <= 8:
+                    if name is None or name in values:
+                        continue
+                    if name in ("src6", "dst6"):
+                        if len(raw) == 16:
+                            values[name] = raw
+                    elif len(raw) <= 8:
                         values[name] = int.from_bytes(raw, "big")
                 flows.append(self._flow_from_values(tpl, values, ip, domain, default_rate))
 
@@ -471,6 +485,10 @@ class NetflowDecoder:
         i_ver = idx.get("ipver", -1)
         i_sampler = idx.get("sampler", -1)
         i_srate = idx.get("srate", -1)
+        i_s4 = idx.get("src4", -1)
+        i_d4 = idx.get("dst4", -1)
+        i_s6 = idx.get("src6", -1)
+        i_d6 = idx.get("dst6", -1)
         v6_default = tpl.v6_default
         sampler_rates = self.sampler_rates
         append = flows.append
@@ -481,6 +499,13 @@ class NetflowDecoder:
                 rate = sampler_rates.get((ip, domain, r[i_sampler]), default_rate)
             else:
                 rate = default_rate
+            v6 = (r[i_ver] == 6) if i_ver >= 0 else v6_default
+            if v6:
+                src = r[i_s6] if i_s6 >= 0 else None
+                dst = r[i_d6] if i_d6 >= 0 else None
+            else:
+                src = r[i_s4] if i_s4 >= 0 else None
+                dst = r[i_d4] if i_d4 >= 0 else None
             append(
                 (
                     r[i_in] if i_in >= 0 else 0,
@@ -490,12 +515,14 @@ class NetflowDecoder:
                     r[i_sp] if i_sp >= 0 else None,
                     r[i_dp] if i_dp >= 0 else None,
                     r[i_bytes] if i_bytes >= 0 else 0,
-                    (r[i_ver] == 6) if i_ver >= 0 else v6_default,
+                    v6,
                     rate,
+                    src,
+                    dst,
                 )
             )
 
-    def _flow_from_values(self, tpl: Template, v: dict[str, int], ip: str, domain: int, default_rate: int) -> tuple:
+    def _flow_from_values(self, tpl: Template, v: dict, ip: str, domain: int, default_rate: int) -> tuple:
         if v.get("srate"):
             rate = v["srate"]
         elif "sampler" in v:
@@ -503,6 +530,7 @@ class NetflowDecoder:
         else:
             rate = default_rate
         nbytes = v.get("bytes", v.get("obytes", 0))
+        v6 = (v["ipver"] == 6) if "ipver" in v else tpl.v6_default
         return (
             v.get("in_if", 0),
             v.get("out_if", 0),
@@ -511,8 +539,10 @@ class NetflowDecoder:
             v.get("src_peer"),
             v.get("dst_peer"),
             nbytes,
-            (v["ipver"] == 6) if "ipver" in v else tpl.v6_default,
+            v6,
             rate,
+            v.get("src6") if v6 else v.get("src4"),
+            v.get("dst6") if v6 else v.get("dst4"),
         )
 
     def _options_data(self, tpl: Template, data: bytes, pos: int, end: int, ip: str, domain: int) -> None:
