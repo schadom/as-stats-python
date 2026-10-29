@@ -1,5 +1,6 @@
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { useSearchParams } from "react-router";
 import { get, type SeriesResponse, type TopItem, type TopResponse } from "../api";
 import { MirrorSpark, bucketSeconds, layersByLink } from "../components/charts";
 import { FilterBar } from "../components/Layout";
@@ -8,6 +9,7 @@ import { avgBps, bps, bytes, rangeLabel } from "../format";
 import { filterQuery, navQuery, useFilters, useSession } from "../state";
 
 type Sort = "total" | "in" | "out";
+type Unit = "bandwidth" | "volume";
 
 function ShareBar({ item, colors }: { item: TopItem; colors: Map<number, string> }) {
   const total = item.in + item.out;
@@ -29,6 +31,19 @@ export default function TopAS() {
   const { meta, linkById } = useSession();
   const [f] = useFilters();
   const [sort, setSort] = useState<Sort>("total");
+  // Kept in the URL (?show=volume) so a view can be shared; bandwidth is the default.
+  const [params, setParams] = useSearchParams();
+  const unit: Unit = params.get("show") === "volume" ? "volume" : "bandwidth";
+  const setUnit = (u: Unit) =>
+    setParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        if (u === "volume") next.set("show", "volume");
+        else next.delete("show");
+        return next;
+      },
+      { replace: true },
+    );
   const [limit, setLimit] = useState(meta.top_default_limit || 20);
 
   const top = useQuery({
@@ -59,16 +74,27 @@ export default function TopAS() {
       />
       <FilterBar
         extra={
-          <Segmented
-            label="Sort by"
-            value={sort}
-            onChange={setSort}
-            options={[
-              { id: "total", label: "Total" },
-              { id: "in", label: "In" },
-              { id: "out", label: "Out" },
-            ]}
-          />
+          <>
+            <Segmented
+              label="Show"
+              value={unit}
+              onChange={setUnit}
+              options={[
+                { id: "volume", label: "Total volume" },
+                { id: "bandwidth", label: "Average bandwidth" },
+              ]}
+            />
+            <Segmented
+              label="Sort by"
+              value={sort}
+              onChange={setSort}
+              options={[
+                { id: "total", label: "Total" },
+                { id: "in", label: "In" },
+                { id: "out", label: "Out" },
+              ]}
+            />
+          </>
         }
       />
       {top.error && <ErrorNote error={top.error} />}
@@ -94,7 +120,7 @@ export default function TopAS() {
             <span className="flex justify-between">
               <span>In above the line, out below</span>
             </span>
-            <span className="text-right">Average rate</span>
+            <span className="text-right">{unit === "volume" ? "Total volume" : "Average bandwidth"}</span>
           </li>
           {top.data.items.map((item, idx) => {
             const layers = series.data ? layersByLink(series.data, f.ip, linkById, item.asn) : [];
@@ -116,12 +142,23 @@ export default function TopAS() {
                   )}
                 </div>
                 <dl className="col-span-2 grid grid-cols-[auto_1fr] gap-x-3 text-[13px] md:col-span-1">
-                  <dt className="text-muted">In</dt>
-                  <dd className="text-right font-medium num" title={bytes(item.in)}>{bps(avgBps(item.in, duration))}</dd>
-                  <dt className="text-muted">Out</dt>
-                  <dd className="text-right font-medium num" title={bytes(item.out)}>{bps(avgBps(item.out, duration))}</dd>
-                  <dt className="text-muted">Volume</dt>
-                  <dd className="text-right text-muted num">{bytes(item.in + item.out)}</dd>
+                  {(
+                    [
+                      ["In", item.in, "text-right font-medium num"],
+                      ["Out", item.out, "text-right font-medium num"],
+                      ["Total", item.in + item.out, "text-right text-muted num"],
+                    ] as const
+                  ).map(([label, value, cls]) => (
+                    <Fragment key={label}>
+                      <dt className="text-muted">{label}</dt>
+                      <dd
+                        className={cls}
+                        title={unit === "volume" ? `average ${bps(avgBps(value, duration))}` : `${bytes(value)} in total`}
+                      >
+                        {unit === "volume" ? bytes(value) : bps(avgBps(value, duration))}
+                      </dd>
+                    </Fragment>
+                  ))}
                 </dl>
               </li>
             );

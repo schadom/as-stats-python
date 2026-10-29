@@ -181,7 +181,7 @@ export function FilterBar({ extra }: { extra?: ReactNode }) {
           )}
         </div>
       )}
-      {extra && <div className="ml-auto flex items-center gap-2">{extra}</div>}
+      {extra && <div className="ml-auto flex flex-wrap items-center justify-end gap-2">{extra}</div>}
     </div>
   );
 }
