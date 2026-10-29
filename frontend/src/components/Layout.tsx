@@ -2,7 +2,8 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { get, post, type SearchHit } from "../api";
-import { RANGES, navQuery, useFilters, useSession, useTheme } from "../state";
+import { navQuery, useFilters, useSession, useTheme } from "../state";
+import { TimeRangeSelect } from "./TimeRangeSelect";
 import { cx, LinkDot, Segmented } from "./ui";
 
 function Icon({ d }: { d: string }) {
@@ -141,7 +142,7 @@ export function FilterBar({ extra }: { extra?: ReactNode }) {
   };
   return (
     <div className="mb-5 flex flex-wrap items-center gap-x-3 gap-y-2">
-      <Segmented label="Time range" value={f.range} options={RANGES} onChange={(range) => setF({ range })} />
+      <TimeRangeSelect value={f.range} onChange={(range) => setF({ range })} />
       <Segmented
         label="IP version"
         value={f.ip}

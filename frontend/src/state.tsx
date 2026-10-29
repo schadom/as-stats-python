@@ -34,16 +34,16 @@ export function useMeta() {
 
 // ---------------------------------------------------------------- global filters (kept in the URL)
 
-export const RANGES: { id: string; label: string }[] = [
-  { id: "1h", label: "1h" },
-  { id: "3h", label: "3h" },
-  { id: "6h", label: "6h" },
-  { id: "24h", label: "24h" },
-  { id: "48h", label: "48h" },
-  { id: "7d", label: "7d" },
-  { id: "30d", label: "30d" },
-  { id: "90d", label: "90d" },
-  { id: "365d", label: "1y" },
+export const RANGES: { id: string; label: string; long: string; group: number }[] = [
+  { id: "1h", label: "1h", long: "Last hour", group: 0 },
+  { id: "3h", label: "3h", long: "Last 3 hours", group: 0 },
+  { id: "6h", label: "6h", long: "Last 6 hours", group: 0 },
+  { id: "24h", label: "24h", long: "Last 24 hours", group: 1 },
+  { id: "48h", label: "48h", long: "Last 2 days", group: 1 },
+  { id: "7d", label: "7d", long: "Last 7 days", group: 2 },
+  { id: "30d", label: "30d", long: "Last 30 days", group: 2 },
+  { id: "90d", label: "90d", long: "Last 90 days", group: 2 },
+  { id: "365d", label: "1y", long: "Last year", group: 2 },
 ];
 
 export type IpFilter = "all" | "4" | "6";
