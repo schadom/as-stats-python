@@ -5,6 +5,7 @@ from __future__ import annotations
 import ipaddress
 import re
 import time
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
@@ -31,6 +32,7 @@ router = APIRouter()
 
 COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 TAG_RE = re.compile(r"^[A-Za-z0-9_.-]{1,32}$")
+RATE_UNITS = ("b/s", "bit/s")
 
 
 # ---------------------------------------------------------------- meta / settings
@@ -38,13 +40,14 @@ TAG_RE = re.compile(r"^[A-Za-z0-9_.-]{1,32}$")
 
 @router.get("/meta")
 def meta(user: User = Depends(current_user), db: Session = Depends(get_db)):
-    s = appsettings.get_many(db, ["site_name", "my_asn", "top_default_limit"])
+    s = appsettings.get_many(db, ["site_name", "my_asn", "top_default_limit", "rate_unit"])
     links = db.execute(select(Link).order_by(Link.sort_order, Link.name)).scalars().all()
     return {
         "version": __version__,
         "site_name": s["site_name"],
         "my_asn": s["my_asn"],
         "top_default_limit": s["top_default_limit"],
+        "rate_unit": s["rate_unit"] if s["rate_unit"] in RATE_UNITS else "b/s",
         "links": [
             {"id": l.id, "tag": l.tag, "name": l.name, "color": l.color, "enabled": l.enabled, "sort_order": l.sort_order}
             for l in links
@@ -73,6 +76,7 @@ class SettingsIn(BaseModel):
     peeringdb_enabled: bool | None = None
     peeringdb_api_key: str | None = Field(default=None, max_length=128)
     top_default_limit: int | None = Field(default=None, ge=5, le=200)
+    rate_unit: Literal["b/s", "bit/s"] | None = None
     ipasn_enabled: bool | None = None
     ipasn_url: str | None = Field(default=None, max_length=512, pattern=r"^https?://")
 

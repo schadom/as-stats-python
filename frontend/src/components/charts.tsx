@@ -5,7 +5,7 @@ import { DataZoomComponent, GridComponent, TooltipComponent } from "echarts/comp
 import { CanvasRenderer } from "echarts/renderers";
 import type { SeriesResponse } from "../api";
 import { bps, bytes as fmtBytes } from "../format";
-import { useIsDark, type IpFilter } from "../state";
+import { useIsDark, useSession, type IpFilter } from "../state";
 
 echarts.use([LineChart, GridComponent, TooltipComponent, DataZoomComponent, CanvasRenderer]);
 
@@ -168,6 +168,7 @@ export function TrafficChart({
   const el = useRef<HTMLDivElement>(null);
   const chart = useRef<echarts.ECharts | null>(null);
   const dark = useIsDark();
+  const rateUnit = useSession().meta.rate_unit ?? "b/s";
 
   useEffect(() => {
     if (!el.current) return;
@@ -216,7 +217,7 @@ export function TrafficChart({
     c.setOption(
       {
         animation: false,
-        grid: { left: 64, right: 16, top: 16, bottom: 36 },
+        grid: { left: rateUnit === "bit/s" ? 76 : 64, right: 16, top: 16, bottom: 36 },
         textStyle: { fontFamily: "Instrument Sans Variable, system-ui, sans-serif", color: muted },
         tooltip: {
           trigger: "axis",
@@ -282,7 +283,7 @@ export function TrafficChart({
       },
       { notMerge: true },
     );
-  }, [layers, buckets, seconds, dark]);
+  }, [layers, buckets, seconds, dark, rateUnit]);
 
   return <div ref={el} style={{ height }} className="w-full" />;
 }

@@ -11,10 +11,17 @@ function scaled(value: number, base: number, digits: number): [string, string] {
   return [`${value < 0 ? "-" : ""}${v.toFixed(d)}`, SI[i]];
 }
 
-/** bits per second, e.g. "12.4 Gb/s" */
+let rateSuffix = "b/s";
+
+/** Pick how bit rates are written: "b/s" (12.4 Mb/s) or "bit/s" (12.4 Mbit/s). Set from the site settings. */
+export function setRateUnit(unit: string | undefined): void {
+  rateSuffix = unit === "bit/s" ? "bit/s" : "b/s";
+}
+
+/** bits per second, e.g. "12.4 Gb/s" or "12.4 Gbit/s" */
 export function bps(value: number, digits = 1): string {
   const [n, p] = scaled(value, 1000, digits);
-  return `${n} ${p}b/s`;
+  return `${n} ${p}${rateSuffix}`;
 }
 
 /** byte volume, e.g. "3.2 TB" */

@@ -25,6 +25,8 @@ DEFAULTS: dict[str, Any] = {
     "peeringdb_enabled": True,
     "peeringdb_api_key": "",
     "top_default_limit": 20,
+    # How bit rates are written: "b/s" (12.4 Mb/s) or "bit/s" (12.4 Mbit/s).
+    "rate_unit": "b/s",
     "ipasn_enabled": True,
     "ipasn_url": "https://iptoasn.com/data/ip2asn-combined.tsv.gz",
 }

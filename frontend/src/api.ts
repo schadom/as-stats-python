@@ -62,6 +62,8 @@ export interface User {
   last_login: number | null;
 }
 
+export type RateUnit = "b/s" | "bit/s";
+
 export interface LinkMeta {
   id: number;
   tag: string;
@@ -76,6 +78,8 @@ export interface Meta {
   site_name: string;
   my_asn: number | null;
   top_default_limit: number;
+  /** Missing on servers older than this frontend: treat as "b/s". */
+  rate_unit?: RateUnit;
   links: LinkMeta[];
   has_ix: boolean;
 }
@@ -232,6 +236,7 @@ export interface Settings {
   peeringdb_enabled: boolean;
   peeringdb_api_key: string;
   top_default_limit: number;
+  rate_unit: RateUnit;
   ipasn_enabled: boolean;
   ipasn_url: string;
 }
