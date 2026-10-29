@@ -35,6 +35,8 @@ export function useMeta() {
 // ---------------------------------------------------------------- global filters (kept in the URL)
 
 export const RANGES: { id: string; label: string }[] = [
+  { id: "1h", label: "1h" },
+  { id: "3h", label: "3h" },
   { id: "6h", label: "6h" },
   { id: "24h", label: "24h" },
   { id: "48h", label: "48h" },
