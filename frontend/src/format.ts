@@ -24,6 +24,15 @@ export function bps(value: number, digits = 1): string {
   return `${n} ${p}${rateSuffix}`;
 }
 
+/**
+ * Bit rate for chart axis ticks: as precise as the tick needs, without trailing zeros,
+ * so 1.5 Gb/s and 2 Gb/s never both read "2 Gb/s".
+ */
+export function bpsAxis(value: number): string {
+  const [n, p] = scaled(value, 1000, 2);
+  return `${n.includes(".") ? n.replace(/\.?0+$/, "") : n} ${p}${rateSuffix}`;
+}
+
 /** byte volume, e.g. "3.2 TB" */
 export function bytes(value: number, digits = 1): string {
   const [n, p] = scaled(value, 1000, digits);

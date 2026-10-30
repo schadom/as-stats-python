@@ -4,7 +4,7 @@ import { LineChart } from "echarts/charts";
 import { DataZoomComponent, GridComponent, TooltipComponent } from "echarts/components";
 import { CanvasRenderer } from "echarts/renderers";
 import type { SeriesResponse } from "../api";
-import { bps, bytes as fmtBytes } from "../format";
+import { bps, bpsAxis, bytes as fmtBytes } from "../format";
 import { useIsDark, useSession, type IpFilter } from "../state";
 
 echarts.use([LineChart, GridComponent, TooltipComponent, DataZoomComponent, CanvasRenderer]);
@@ -262,7 +262,7 @@ export function TrafficChart({
         },
         yAxis: {
           type: "value",
-          axisLabel: { color: muted, formatter: (v: number) => bps(Math.abs(v), 0) },
+          axisLabel: { color: muted, formatter: (v: number) => bpsAxis(Math.abs(v)) },
           splitLine: { lineStyle: { color: rule, type: [3, 3] } },
           axisLine: { show: false },
         },
