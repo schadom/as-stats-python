@@ -105,6 +105,7 @@ def wait_for_db(timeout: float = 120.0) -> None:
 # create_all() only creates missing tables, so existing databases get these here.
 ADDED_COLUMNS = [
     ("exporters", "as_source", "VARCHAR(8) NOT NULL DEFAULT 'auto'"),
+    ("links", "capacity_mbit", "INTEGER NULL"),
 ]
 
 

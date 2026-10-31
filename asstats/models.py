@@ -106,6 +106,8 @@ class Link(Base):
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Optional, in Mbit/s per direction. Only used to show how full the link is.
+    capacity_mbit: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     interfaces: Mapped[list["LinkInterface"]] = relationship(
         back_populates="link",

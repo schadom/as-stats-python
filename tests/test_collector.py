@@ -258,3 +258,18 @@ def test_migration_adds_as_source_column(tmp_path):
     assert "as_source" in {c["name"] for c in inspect(eng).get_columns("exporters")}
     with eng.connect() as conn:
         assert conn.execute(text("SELECT as_source FROM exporters")).scalar_one() == "auto"
+
+
+def test_migration_adds_link_capacity_column(tmp_path):
+    from sqlalchemy import create_engine, inspect, text
+
+    from asstats.db import migrate
+
+    eng = create_engine(f"sqlite:///{tmp_path / 'old.db'}")
+    with eng.begin() as conn:
+        conn.execute(text("CREATE TABLE links (id INTEGER PRIMARY KEY, tag VARCHAR(32), name VARCHAR(128))"))
+        conn.execute(text("INSERT INTO links (tag, name) VALUES ('t1', 'Transit')"))
+    migrate(eng)
+    migrate(eng)  # idempotent
+    with eng.connect() as conn:
+        assert conn.execute(text("SELECT capacity_mbit FROM links")).scalar_one() is None

@@ -49,7 +49,15 @@ def meta(user: User = Depends(current_user), db: Session = Depends(get_db)):
         "top_default_limit": s["top_default_limit"],
         "rate_unit": s["rate_unit"] if s["rate_unit"] in RATE_UNITS else "b/s",
         "links": [
-            {"id": l.id, "tag": l.tag, "name": l.name, "color": l.color, "enabled": l.enabled, "sort_order": l.sort_order}
+            {
+                "id": l.id,
+                "tag": l.tag,
+                "name": l.name,
+                "color": l.color,
+                "enabled": l.enabled,
+                "sort_order": l.sort_order,
+                "capacity_mbit": l.capacity_mbit,
+            }
             for l in links
         ],
         "has_ix": db.execute(select(func.count()).select_from(PdbIx)).scalar_one() > 0,
@@ -192,6 +200,8 @@ class LinkIn(BaseModel):
     color: str = "#4f7cff"
     sort_order: int = 0
     enabled: bool = True
+    # Mbit/s; leaving it out keeps the stored value, null clears it.
+    capacity_mbit: int | None = Field(default=None, ge=1, le=100_000_000)
     interfaces: list[LinkInterfaceIn] = []
 
     @field_validator("tag")
@@ -218,6 +228,7 @@ def link_out(link: Link, names: dict[tuple[str, int], str | None] | None = None)
         "color": link.color,
         "sort_order": link.sort_order,
         "enabled": link.enabled,
+        "capacity_mbit": link.capacity_mbit,
         "interfaces": [
             {
                 "id": i.id,
@@ -282,6 +293,8 @@ def _apply_link(db: Session, link: Link, body: LinkIn) -> None:
     link.color = body.color
     link.sort_order = body.sort_order
     link.enabled = body.enabled
+    if "capacity_mbit" in body.model_fields_set:
+        link.capacity_mbit = body.capacity_mbit
     existing = {(i.exporter_id, int(i.ifindex)): i for i in link.interfaces}
     wanted = {(i.exporter_id, i.ifindex): i for i in body.interfaces}
     for key, iface in existing.items():

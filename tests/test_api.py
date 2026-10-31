@@ -169,3 +169,18 @@ def test_rate_unit_setting(client):
     assert client.put("/api/settings", json={"rate_unit": "Mbps"}, headers=H).status_code == 422
     assert client.put("/api/settings", json={"rate_unit": "bit/s"}, headers=H).json()["rate_unit"] == "bit/s"
     assert client.get("/api/meta").json()["rate_unit"] == "bit/s"
+
+
+def test_link_capacity(client, engine):
+    login(client)
+    exp = client.post("/api/exporters", json={"ip": "192.0.2.9", "name": "edge9"}, headers=H).json()
+    body = {"tag": "t1", "name": "T1", "interfaces": [{"exporter_id": exp["id"], "ifindex": 3}]}
+    link = client.post("/api/links", json=body, headers=H).json()
+    assert link["capacity_mbit"] is None
+    link = client.put(f"/api/links/{link['id']}", json={**body, "capacity_mbit": 10_000}, headers=H).json()
+    assert link["capacity_mbit"] == 10_000
+    # clients that do not know the field keep the stored value
+    assert client.put(f"/api/links/{link['id']}", json={**body, "name": "T one"}, headers=H).json()["capacity_mbit"] == 10_000
+    assert client.get("/api/meta").json()["links"][0]["capacity_mbit"] == 10_000
+    assert client.put(f"/api/links/{link['id']}", json={**body, "capacity_mbit": None}, headers=H).json()["capacity_mbit"] is None
+    assert client.put(f"/api/links/{link['id']}", json={**body, "capacity_mbit": 0}, headers=H).status_code == 422
