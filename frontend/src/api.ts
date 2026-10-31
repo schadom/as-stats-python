@@ -82,6 +82,8 @@ export interface Meta {
   top_default_limit: number;
   /** Missing on servers older than this frontend: treat as "b/s". */
   rate_unit?: RateUnit;
+  /** Missing on servers older than this frontend: treat as off. */
+  prefix_enabled?: boolean;
   links: LinkMeta[];
   has_ix: boolean;
 }
@@ -143,6 +145,21 @@ export interface UsageResponse {
   start: number;
   end: number;
   links: { link_id: number; in: number; out: number; top: (AsMeta & { asn: number; in: number; out: number })[] }[];
+}
+
+type InOutLinks = { in: number; out: number; links: Record<string, { in: number; out: number }> };
+
+export interface AsPrefixes {
+  enabled: boolean;
+  start: number;
+  end: number;
+  step: number;
+  /** Oldest stored hour of prefix data, null when there is none. */
+  first: number | null;
+  count: number;
+  total: { in: number; out: number };
+  other: InOutLinks;
+  prefixes: (InOutLinks & { prefix: string })[];
 }
 
 export interface IxList {
@@ -239,6 +256,10 @@ export interface Settings {
   peeringdb_api_key: string;
   top_default_limit: number;
   rate_unit: RateUnit;
+  prefix_enabled: boolean;
+  prefix_retention_days: number;
+  prefix_min_mb_hour: number;
+  prefix_max_per_as: number;
   ipasn_enabled: boolean;
   ipasn_url: string;
 }

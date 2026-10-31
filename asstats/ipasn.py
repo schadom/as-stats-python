@@ -62,6 +62,19 @@ class IpAsnTable:
             return self.v6_asn[i]
         return 0
 
+    def range_v4(self, addr: int) -> tuple[int, int, int] | None:
+        """(start, end, asn) of the range holding addr, or None."""
+        i = bisect_right(self.v4_start, addr) - 1
+        if i >= 0 and addr <= self.v4_end[i]:
+            return self.v4_start[i], self.v4_end[i], self.v4_asn[i]
+        return None
+
+    def range_v6(self, addr: int) -> tuple[int, int, int] | None:
+        i = bisect_right(self.v6_start, addr) - 1
+        if i >= 0 and addr <= self.v6_end[i]:
+            return self.v6_start[i], self.v6_end[i], self.v6_asn[i]
+        return None
+
     def lookup(self, addr: str) -> int:
         """Convenience lookup by textual address (not used on the hot path)."""
         ip = ipaddress.ip_address(addr)
@@ -154,3 +167,30 @@ def load_binary(path: Path) -> IpAsnTable:
 def parse_gzip(path: Path) -> IpAsnTable:
     with gzip.open(path, "rt", encoding="utf-8", errors="replace") as fh:
         return parse_lines(line.rstrip("\n") for line in fh)
+
+
+def prefix_for(addr: int, v6: bool, rng: tuple[int, int, int] | None) -> str:
+    """CIDR prefix of addr: the largest aligned block that fits inside its range.
+
+    Most dataset ranges are exactly one announced prefix. Ranges that merge
+    several adjacent announcements are split into aligned blocks. Without a
+    range (not routed, or no dataset loaded) we fall back to /24 and /48.
+    """
+    bits = 128 if v6 else 32
+    full = (1 << bits) - 1
+    if rng is None:
+        plen = 48 if v6 else 24
+        net = addr & (full ^ ((1 << (bits - plen)) - 1))
+    else:
+        start, end = rng[0], rng[1]
+        plen = bits
+        net = addr
+        for length in range(0, bits + 1):
+            host = (1 << (bits - length)) - 1
+            lo = addr & (full ^ host)
+            if lo >= start and lo | host <= end:
+                plen, net = length, lo
+                break
+    if v6:
+        return f"{ipaddress.IPv6Address(net).compressed}/{plen}"
+    return f"{ipaddress.IPv4Address(net)}/{plen}"

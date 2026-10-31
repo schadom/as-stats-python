@@ -1,7 +1,64 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { get, put, type Settings } from "../../api";
+import { del, get, put, type Settings } from "../../api";
 import { Button, ErrorNote, Field, Input, Loading, PageHeader, Panel, Select, Toggle } from "../../components/ui";
+import { bytes, dateTime } from "../../format";
+
+/** Optional prefix statistics: switch, limits, current size and a way to delete the data. */
+function PrefixPanel({ s, set }: { s: Settings; set: (patch: Partial<Settings>) => void }) {
+  const qc = useQueryClient();
+  const info = useQuery({ queryKey: ["prefix-info"], queryFn: () => get<{ rows: number; first: number | null }>("/prefixes/info") });
+  const [confirm, setConfirm] = useState(false);
+  const purge = useMutation({
+    mutationFn: () => del<{ deleted: number }>("/prefixes"),
+    onSuccess: () => {
+      setConfirm(false);
+      qc.invalidateQueries({ queryKey: ["prefix-info"] });
+      qc.invalidateQueries({ queryKey: ["as-prefixes"] });
+    },
+  });
+  const num = (v: string) => (v === "" ? 0 : Number(v));
+  const rows = info.data?.rows ?? 0;
+  return (
+    <Panel title="Prefix statistics">
+      <div className="grid gap-4">
+        <Toggle checked={s.prefix_enabled} onChange={(v) => set({ prefix_enabled: v })} label="Record which prefixes of each AS your network talks to" />
+        <p className="-mt-2 text-[13px] text-muted">
+          Shown on each AS page. Stored hourly, per link. Needs flows with IP addresses and uses extra disk space, roughly 2 to 3 times the hourly AS data.
+        </p>
+        <div className="grid gap-4 sm:grid-cols-3">
+          <Field label="Keep for, days">
+            <Input type="number" min={1} max={3650} value={s.prefix_retention_days} onChange={(e) => set({ prefix_retention_days: num(e.target.value) })} />
+          </Field>
+          <Field label="Ignore below, MB per hour" hint="Per prefix and AS.">
+            <Input type="number" min={0} step="any" value={s.prefix_min_mb_hour} onChange={(e) => set({ prefix_min_mb_hour: num(e.target.value) })} />
+          </Field>
+          <Field label="Prefixes per AS and hour">
+            <Input type="number" min={1} max={1000} value={s.prefix_max_per_as} onChange={(e) => set({ prefix_max_per_as: num(e.target.value) })} />
+          </Field>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-rule pt-3 text-[13px] text-muted">
+          <span>
+            {rows
+              ? `${rows.toLocaleString()} rows, about ${bytes(rows * 50)}${info.data?.first ? `, since ${dateTime(info.data.first)}` : ""}`
+              : "No prefix data stored."}
+          </span>
+          {rows > 0 &&
+            (confirm ? (
+              <span className="flex items-center gap-2">
+                <span className="text-ink-2">Delete all prefix data?</span>
+                <Button size="sm" variant="ghost" onClick={() => setConfirm(false)}>Cancel</Button>
+                <Button size="sm" variant="danger" onClick={() => purge.mutate()} disabled={purge.isPending}>Delete</Button>
+              </span>
+            ) : (
+              <Button size="sm" variant="danger" onClick={() => setConfirm(true)}>Delete prefix data</Button>
+            ))}
+        </div>
+        {purge.error && <ErrorNote error={purge.error} />}
+      </div>
+    </Panel>
+  );
+}
 
 export default function SettingsGeneral() {
   const qc = useQueryClient();
@@ -100,6 +157,8 @@ export default function SettingsGeneral() {
             </Field>
           </div>
         </Panel>
+
+        <PrefixPanel s={s} set={set} />
 
         <Panel title="PeeringDB">
           <div className="grid gap-4">

@@ -3,6 +3,7 @@ import { useParams } from "react-router";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { get, patch, post, type AsDetail as AsDetailT, type SeriesResponse } from "../api";
 import { ChartLegend, TrafficChart, bucketSeconds, layersByFamily, layersByLink } from "../components/charts";
+import { AsPrefixes } from "../components/AsPrefixes";
 import { FilterBar } from "../components/Layout";
 import { Badge, Button, Empty, ErrorNote, Field, Input, LinkDot, Loading, Modal, Panel, Segmented, td, th } from "../components/ui";
 import { avgBps, bps, bytes, rangeLabel, speed } from "../format";
@@ -229,6 +230,7 @@ export default function AsDetail() {
           )}
         </Panel>
       </div>
+      <AsPrefixes asn={asn} filters={f} linkById={linkById} isAdmin={isAdmin} enabled={!!meta.prefix_enabled} />
       {renaming && <Rename data={d} onClose={() => setRenaming(false)} />}
     </>
   );
