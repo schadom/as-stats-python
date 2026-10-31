@@ -66,7 +66,8 @@ def test_collects_prefixes_when_enabled(engine, tmp_path):
         (transit, 13335, "1.1.1.0/24"): (0, 300),
         (transit, 0, "203.0.113.0/24"): (40, 0),
     }
-    hours = {r[0] for r in engine.connect().execute(select(PREFIX_TRAFFIC.c.ts))}
+    with engine.connect() as conn:
+        hours = {r[0] for r in conn.execute(select(PREFIX_TRAFFIC.c.ts))}
     assert all(h % 3600 == 0 for h in hours)
 
     # switching it off stops collection without a restart
@@ -137,7 +138,9 @@ def test_retention_and_purge(engine):
     _insert(engine, old, [(1, 1, "192.0.2.0/24", 1, 1)])
     _insert(engine, recent, [(1, 1, "192.0.2.0/24", 1, 1)])
     prefixes.apply_retention(engine)
-    assert len(prefix_rows(engine)) == 1 and prefixes.first_hour(engine.connect()) == recent
+    with engine.connect() as conn:
+        first = prefixes.first_hour(conn)
+    assert len(prefix_rows(engine)) == 1 and first == recent
     assert prefixes.purge(engine) == 1
     assert prefix_rows(engine) == {}
 
