@@ -130,10 +130,60 @@ def migrate(engine: Engine) -> None:
                 raise
 
 
+# Lock that serializes schema setup and the first admin account across processes
+# and containers (web and collector may start at the same moment on an empty database).
+_LOCK_NAME = "asstats_init"
+_LOCK_KEY = 0x41535354  # PostgreSQL advisory lock key ("ASST")
+_LOCK_TIMEOUT = 120
+
+
+@contextmanager
+def setup_lock(engine: Engine | None = None) -> Iterator[None]:
+    engine = engine or get_engine()
+    name = engine.dialect.name
+    if name == "sqlite":
+        path = engine.url.database
+        if not path or path == ":memory:":
+            yield
+            return
+        try:
+            import fcntl
+        except ImportError:  # pragma: no cover - not on Linux/macOS
+            yield
+            return
+        # a file next to the database: works for every process using the same data volume
+        with open(f"{path}.setup-lock", "a+") as fh:
+            fcntl.flock(fh, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(fh, fcntl.LOCK_UN)
+        return
+    with engine.connect() as conn:
+        if name in ("mysql", "mariadb"):
+            got = conn.execute(text("SELECT GET_LOCK(:n, :t)"), {"n": _LOCK_NAME, "t": _LOCK_TIMEOUT}).scalar()
+            if got != 1:
+                raise RuntimeError("timed out waiting for another process to finish database setup")
+            try:
+                yield
+            finally:
+                conn.execute(text("SELECT RELEASE_LOCK(:n)"), {"n": _LOCK_NAME})
+        elif name == "postgresql":
+            conn.execute(text("SELECT pg_advisory_lock(:k)"), {"k": _LOCK_KEY})
+            try:
+                yield
+            finally:
+                conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": _LOCK_KEY})
+        else:  # pragma: no cover
+            yield
+
+
 def init_db() -> None:
+    """Create missing tables and columns. Safe to run from several processes at once."""
     wait_for_db()
-    Base.metadata.create_all(get_engine())
-    migrate(get_engine())
+    with setup_lock():
+        Base.metadata.create_all(get_engine())
+        migrate(get_engine())
 
 
 # ---------------------------------------------------------------- dialect helpers

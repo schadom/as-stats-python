@@ -53,7 +53,12 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("web", help="run the web UI/API and background jobs")
     sub.add_parser("collector", help="run the NetFlow/IPFIX/sFlow collector")
     sub.add_parser("rollup", help="run rollups and retention once")
-    sub.add_parser("init", help="create the database schema and the first admin user")
+    i = sub.add_parser("init", help="create the database schema and the first admin user")
+    i.add_argument(
+        "--schema-only",
+        action="store_true",
+        help="only create and migrate the schema, no admin user (used by a separate collector container)",
+    )
     k = sub.add_parser("import-knownlinks", help="import links from an AS-Stats knownlinks file")
     k.add_argument("file")
 
@@ -103,7 +108,8 @@ def main(argv: list[str] | None = None) -> int:
 
         logging.basicConfig(level=get_config().log_level, format="%(asctime)s %(levelname)s [init] %(message)s")
         init_db()
-        bootstrap_admin()
+        if not args.schema_only:
+            bootstrap_admin()
     elif args.command == "import-knownlinks":
         from . import knownlinks
         from .db import init_db, session_scope

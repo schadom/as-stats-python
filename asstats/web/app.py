@@ -14,7 +14,7 @@ from sqlalchemy import func, select
 
 from .. import __version__
 from ..config import get_config
-from ..db import get_engine, init_db, session_scope
+from ..db import get_engine, init_db, session_scope, setup_lock
 from ..models import ROLE_ADMIN, User
 from ..security import hash_password, random_password
 from . import routes_admin, routes_auth, routes_config, routes_stats
@@ -26,7 +26,15 @@ CSRF_HEADER = "x-requested-with"
 
 
 def bootstrap_admin() -> None:
-    """Create the first admin account if there are no users yet."""
+    """Create the first admin account if there are no users yet.
+
+    Runs under the setup lock, so two processes starting together create only one.
+    """
+    with setup_lock():
+        _bootstrap_admin()
+
+
+def _bootstrap_admin() -> None:
     cfg = get_config()
     with session_scope() as db:
         if db.execute(select(func.count()).select_from(User)).scalar_one() > 0:
