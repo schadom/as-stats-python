@@ -31,12 +31,12 @@ def test_classify():
 
 def test_analyze_skips_small_and_one_directional():
     rows = [
-        (13030, 1, 500 * MB, 0), (13030, 2, 0, 400 * MB),   # mismatch
+        (64496, 1, 500 * MB, 0), (64496, 2, 0, 400 * MB),   # mismatch
         (64500, 2, 50 * MB, 0), (64500, 3, 0, 40 * MB),     # below 100 MB
-        (16509, 3, 900 * MB, 0), (16509, 3, 0, 1 * MB),     # outbound under 5 % of the minimum
+        (64498, 3, 900 * MB, 0), (64498, 3, 0, 1 * MB),     # outbound under 5 % of the minimum
     ]
     res = analyze(rows, TYPES, 100 * MB)
-    assert [(r.asn, r.kind) for r in res] == [(13030, "in_peer_out_transit")]
+    assert [(r.asn, r.kind) for r in res] == [(64496, "in_peer_out_transit")]
     assert len(analyze(rows, TYPES, 0)) == 3
 
 
@@ -47,7 +47,7 @@ def _login(c):
 def _setup_links(c):
     exp = c.post("/api/exporters", json={"ip": "192.0.2.1", "name": "edge1"}, headers=H).json()
     ids = {}
-    for tag, ifindex, ltype in (("rix", 1, "ix"), ("swf", 2, "transit"), ("ufd", 3, "transit")):
+    for tag, ifindex, ltype in (("ix-a", 1, "ix"), ("transit-a", 2, "transit"), ("transit-b", 3, "transit")):
         body = {"tag": tag, "name": tag.upper(), "interfaces": [{"exporter_id": exp["id"], "ifindex": ifindex}]}
         r = c.post("/api/links", json={**body, "link_type": ltype}, headers=H)
         assert r.status_code == 201, r.text
@@ -69,21 +69,21 @@ def test_api(engine):
         _login(c)
         assert c.get("/api/symmetry?range=1h").json()["types_set"] is False
         ids = _setup_links(c)
-        rix, swf, ufd = ids["rix"], ids["swf"], ids["ufd"]
+        ix_a, transit_a, transit_b = ids["ix-a"], ids["transit-a"], ids["transit-b"]
         _traffic(engine, [
-            (13030, rix, 3000 * MB, 0), (13030, swf, 0, 2000 * MB),          # Init7: in via IX, out via transit
-            (48362, swf, 500 * MB, 0), (48362, rix, 0, 20000 * MB),          # in via transit, out via IX
-            (16509, ufd, 20000 * MB, 0), (16509, swf, 0, 300 * MB),          # transit vs transit
-            (59890, rix, 200 * MB, 50 * MB),                                 # symmetric via IX
-            (15169, swf, 10 * MB, 10 * MB),                                  # too small
+            (64496, ix_a, 3000 * MB, 0), (64496, transit_a, 0, 2000 * MB),          # in via IX, out via transit
+            (64497, transit_a, 500 * MB, 0), (64497, ix_a, 0, 20000 * MB),          # in via transit, out via IX
+            (64498, transit_b, 20000 * MB, 0), (64498, transit_a, 0, 300 * MB),     # transit vs transit
+            (64499, ix_a, 200 * MB, 50 * MB),                                       # symmetric via IX
+            (64501, transit_a, 10 * MB, 10 * MB),                                   # too small
         ])
         r = c.get("/api/symmetry?range=1h").json()
         assert r["types_set"] is True
         assert [(i["asn"], i["kind"]) for i in r["items"]] == [
-            (48362, "in_transit_out_peer"),
-            (13030, "in_peer_out_transit"),
-            (16509, "asymmetric"),
-            (59890, "ok"),
+            (64497, "in_transit_out_peer"),
+            (64496, "in_peer_out_transit"),
+            (64498, "asymmetric"),
+            (64499, "ok"),
         ]
         assert r["summary"] == {
             "mismatches": 2,
@@ -92,11 +92,11 @@ def test_api(engine):
             "symmetric_peering": 1,
             "compared": 4,
         }
-        init7 = r["items"][1]
-        assert init7["in_links"] == {str(rix): 3000 * MB} and init7["out_links"] == {str(swf): 2000 * MB}
-        assert "name" in init7
+        item1 = r["items"][1]
+        assert item1["in_links"] == {str(ix_a): 3000 * MB} and item1["out_links"] == {str(transit_a): 2000 * MB}
+        assert "name" in item1
         # one AS only (used by the AS page), and a lower minimum
-        assert [i["asn"] for i in c.get("/api/symmetry?range=1h&asn=13030").json()["items"]] == [13030]
+        assert [i["asn"] for i in c.get("/api/symmetry?range=1h&asn=64496").json()["items"]] == [64496]
         assert len(c.get("/api/symmetry?range=1h&min_mb=0").json()["items"]) == 5
 
         # link type: kept when omitted, validated
@@ -113,13 +113,13 @@ def test_since(engine):
     with TestClient(create_app()) as c:
         _login(c)
         ids = _setup_links(c)
-        rix, swf = ids["rix"], ids["swf"]
+        ix_a, transit_a = ids["ix-a"], ids["transit-a"]
         # symmetric 6 hours ago, a quiet hour, then the mismatch from 4 hours ago (no data 2 hours ago)
-        _traffic(engine, [(13030, rix, 500 * MB, 400 * MB)], 3600, now_hour - 6 * 3600)
-        _traffic(engine, [(13030, rix, 1000, 0)], 3600, now_hour - 5 * 3600)
+        _traffic(engine, [(64496, ix_a, 500 * MB, 400 * MB)], 3600, now_hour - 6 * 3600)
+        _traffic(engine, [(64496, ix_a, 1000, 0)], 3600, now_hour - 5 * 3600)
         for h in (4, 3, 1):
-            _traffic(engine, [(13030, rix, 500 * MB, 0), (13030, swf, 0, 400 * MB)], 3600, now_hour - h * 3600)
-        _traffic(engine, [(13030, rix, 500 * MB, 0), (13030, swf, 0, 400 * MB)])  # current, 5 minute data
+            _traffic(engine, [(64496, ix_a, 500 * MB, 0), (64496, transit_a, 0, 400 * MB)], 3600, now_hour - h * 3600)
+        _traffic(engine, [(64496, ix_a, 500 * MB, 0), (64496, transit_a, 0, 400 * MB)])  # current, 5 minute data
         item = c.get("/api/symmetry?range=1h").json()["items"][0]
         assert item["kind"] == "in_peer_out_transit"
         assert item["since"] == now_hour - 4 * 3600
