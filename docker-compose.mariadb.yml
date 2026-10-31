@@ -1,26 +1,47 @@
-# AS-Stats with a MariaDB database:
+# AS-Stats with a MariaDB database, as two containers from the same image:
 #   docker compose -f docker-compose.mariadb.yml up -d
 # Change the passwords below before the first start.
-# The collector uses host networking to see the routers' real addresses, so
-# MariaDB is published on localhost only.
+#
+# The web container reaches MariaDB on the compose network. The collector uses
+# host networking to see the routers' real addresses and reaches MariaDB on
+# localhost, where it is published (127.0.0.1 only).
 services:
-  asstats:
+  web:
     build: .
     image: as-stats-python:latest
+    command: ["asstats", "web"]
     restart: unless-stopped
     depends_on:
       mariadb:
         condition: service_healthy
-    network_mode: host
+    ports:
+      - "8080:8080"
     volumes:
       - asstats-data:/data
     environment:
       TZ: Europe/Vienna
-      ASSTATS_WEB_PORT: "8080"
+      ASSTATS_DATABASE_URL: mysql+pymysql://asstats:asstats-db-password@mariadb:3306/asstats?charset=utf8mb4
+      # ASSTATS_ADMIN_PASSWORD: change-me
+      # ASSTATS_COOKIE_SECURE: "true"
+
+  collector:
+    build: .
+    image: as-stats-python:latest
+    command: ["asstats", "collector"]
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      web:
+        condition: service_started
+    volumes:
+      - asstats-data:/data         # IP-to-AS table and template cache
+    environment:
+      TZ: Europe/Vienna
       ASSTATS_NETFLOW_PORT: "9000"
       ASSTATS_SFLOW_PORT: "6343"
       ASSTATS_DATABASE_URL: mysql+pymysql://asstats:asstats-db-password@127.0.0.1:3307/asstats?charset=utf8mb4
-      # ASSTATS_ADMIN_PASSWORD: change-me
 
   mariadb:
     image: mariadb:11

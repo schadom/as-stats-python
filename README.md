@@ -38,10 +38,12 @@ receive how much traffic over which of my links?
 git clone https://github.com/schadom/as-stats-python
 cd as-stats-python
 docker compose up -d
-docker compose logs asstats | grep -A1 "initial admin"
+docker compose logs web | grep -A1 "initial admin"
 ```
 
-The compose file uses host networking (Linux), see [Keep the router's source address](#keep-the-routers-source-address).
+The compose file runs two containers from the same image: `web` serves the UI on port 8080 and runs the background jobs,
+`collector` receives the flows on the host network (Linux), see
+[Keep the router's source address](#keep-the-routers-source-address). They share the data volume.
 Open <http://your-host:8080>, log in as `admin` with the password from the log, and choose a new one.
 To set the first password yourself, set `ASSTATS_ADMIN_PASSWORD` before the first start.
 
@@ -74,13 +76,75 @@ Docker often rewrites that address to its own gateway (`172.17.0.1`). All router
 NetFlow templates overwrite each other, and the flows are decoded wrongly. The UI warns when it sees flows from a Docker
 gateway address.
 
-Use host networking instead, which `docker-compose.yml` does by default. With `docker run`:
+Only the collector needs to see these addresses, so only the collector runs with host networking. The web UI stays on a
+normal Docker network. That is what `docker-compose.yml` does. With `docker run`:
+
+```sh
+# web UI, API and background jobs
+docker run -d --name asstats-web -p 8080:8080 \
+  -v asstats-data:/data --restart unless-stopped \
+  ghcr.io/schadom/as-stats-python:latest asstats web
+
+# flow collector, on the host network
+docker run -d --name asstats-collector --network host \
+  -e ASSTATS_NETFLOW_PORT=9000 -e ASSTATS_SFLOW_PORT=6343 \
+  -v asstats-data:/data --restart unless-stopped \
+  ghcr.io/schadom/as-stats-python:latest asstats collector
+```
+
+Both containers must use the same data volume: it holds the SQLite database, the IP-to-AS table that the web container
+downloads and the collector reads, and the collector's template cache. With MariaDB, give both the same
+`ASSTATS_DATABASE_URL` (the collector reaches the database from the host network). They can start in any order;
+database setup is coordinated between them, and only the web container creates the first admin account.
+
+**Single container.** Without a command, the image runs both services in one container (`asstats run`). That needs
+host networking for the whole container:
 
 ```sh
 docker run -d --name asstats --network host \
   -e ASSTATS_WEB_PORT=8080 -e ASSTATS_NETFLOW_PORT=9000 -e ASSTATS_SFLOW_PORT=6343 \
-  -v asstats-data:/data --restart unless-stopped as-stats-python
+  -v asstats-data:/data --restart unless-stopped ghcr.io/schadom/as-stats-python:latest
 ```
+
+### Behind a reverse proxy
+
+With the web UI in its own container, a reverse proxy that discovers containers on a Docker network
+(such as [nginx-proxy](https://github.com/nginx-proxy/nginx-proxy) or Traefik) can serve it over HTTPS. Put the `web`
+service on the proxy's network instead of publishing port 8080, for example with a `docker-compose.override.yml`:
+
+```yaml
+services:
+  web:
+    ports: !reset []
+    networks: [proxy]
+    environment:
+      VIRTUAL_HOST: asstats.example.com     # nginx-proxy; Traefik uses labels instead
+      VIRTUAL_PORT: "8080"
+      ASSTATS_COOKIE_SECURE: "true"
+      ASSTATS_TRUSTED_PROXIES: "*"
+
+networks:
+  proxy:
+    external: true                          # the network your reverse proxy is attached to
+```
+
+`ASSTATS_COOKIE_SECURE` limits the login cookie to HTTPS. `ASSTATS_TRUSTED_PROXIES` makes AS-Stats use the client
+address from `X-Forwarded-For`, which the failed-login throttle relies on. `*` is fine when only the proxy can reach the
+web container, as here; otherwise list the proxy's address. The collector is not affected.
+
+### Upgrading from a single container
+
+Installations from before the split run one `asstats` container. To move to two:
+
+```sh
+docker compose down          # stops the old single container
+git pull                     # new docker-compose.yml with web and collector
+docker compose up -d --build
+```
+
+The data volume keeps its name, so statistics, settings and users carry over. Use `web` instead of `asstats` in
+`docker compose logs` and `docker compose exec` from now on. With `docker run`, stop the old container and start the two
+containers above with the same volume. Keeping a single container works as well; nothing forces the switch.
 
 ## Router configuration
 
@@ -246,8 +310,8 @@ share, the links used and a link to bgp.tools.
 Import your existing `knownlinks` file to create exporters and links in one step:
 
 ```sh
-docker compose cp knownlinks asstats:/data/knownlinks
-docker compose exec asstats asstats import-knownlinks /data/knownlinks
+docker compose cp knownlinks web:/data/knownlinks
+docker compose exec web asstats import-knownlinks /data/knownlinks
 ```
 
 Exporters are created with their IP as name, rename them in the UI. RRD history is not imported.
@@ -269,9 +333,12 @@ what is needed before the database is reachable:
 | `ASSTATS_WEB_PORT` | `8080` | Web UI port |
 | `ASSTATS_COOKIE_SECURE` | `false` | Set `true` when served over HTTPS |
 | `ASSTATS_SESSION_HOURS` | `168` | Login session lifetime |
-| `ASSTATS_TRUSTED_PROXIES` | | Comma separated reverse proxy IPs whose `X-Forwarded-For` is trusted |
+| `ASSTATS_TRUSTED_PROXIES` | | Comma separated reverse proxy IPs whose `X-Forwarded-For` is trusted, or `*` |
 | `ASSTATS_FLUSH_INTERVAL` | `60` | Seconds between collector writes |
 | `ASSTATS_LOG_LEVEL` | `INFO` | |
+
+With separate containers, the web container uses the web, admin, cookie and proxy settings and the collector the
+NetFlow, sFlow, listen address and flush settings. Both need the same data volume and database URL.
 
 ### Users
 
@@ -279,7 +346,7 @@ Administrators manage links, exporters, users and settings. Read-only users see 
 administrator must be changed at the next login. If you lock yourself out:
 
 ```sh
-docker compose exec asstats asstats user reset-password admin
+docker compose exec web asstats user reset-password admin
 ```
 
 ## Architecture
@@ -291,8 +358,9 @@ routers ──UDP──▶ collector ──▶ database ◀── web app (FastA
                     └──── IP-to-AS table ◀──────┘  IP-to-AS dataset (iptoasn.com)
 ```
 
-The container runs two processes, started and restarted by `asstats run`: `asstats collector` decodes flows and writes aggregated counters
-every minute, `asstats web` serves the UI and API (`/api`, OpenAPI docs at `/api/docs`) and runs the background jobs.
+There are two services, both in the same image: `asstats collector` decodes flows and writes aggregated counters every
+minute, `asstats web` serves the UI and API (`/api`, OpenAPI docs at `/api/docs`) and runs the background jobs. They run
+as two containers (the compose files) or together in one, started and restarted by `asstats run` (the image default).
 The collector is a single process. Decoding and aggregation run at about one million NetFlow/IPFIX flows or 300,000 sFlow samples per second on one core in benchmarks, so packet reception is usually the limit.
 
 ## Development
