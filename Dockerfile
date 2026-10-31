@@ -31,8 +31,9 @@ RUN chmod +x /usr/local/bin/entrypoint.sh && mkdir -p /data && chown asstats:ass
 VOLUME ["/data"]
 EXPOSE 8080/tcp 9000/udp 6343/udp
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=60s \
-  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/health', timeout=4)" || exit 1
+# Checks the service this container runs (web, collector or both), see asstats/health.py.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s \
+  CMD ["asstats", "healthcheck"]
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["asstats", "run"]

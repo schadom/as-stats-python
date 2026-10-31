@@ -337,6 +337,7 @@ what is needed before the database is reachable:
 | `ASSTATS_TRUSTED_PROXIES` | | Comma separated reverse proxy IPs whose `X-Forwarded-For` is trusted, or `*` |
 | `ASSTATS_FLUSH_INTERVAL` | `60` | Seconds between collector writes |
 | `ASSTATS_LOG_LEVEL` | `INFO` | |
+| `ASSTATS_HEALTHCHECK` | detected | Which service the container health check tests: `web`, `collector` or `run` (both). Normally detected from the container's command |
 
 With separate containers, the web container uses the web, admin, cookie and proxy settings and the collector the
 NetFlow, sFlow, listen address and flush settings. Both need the same data volume and database URL.
