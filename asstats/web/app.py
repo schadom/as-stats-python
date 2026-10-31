@@ -17,7 +17,7 @@ from ..config import get_config
 from ..db import get_engine, init_db, session_scope
 from ..models import ROLE_ADMIN, User
 from ..security import hash_password, random_password
-from . import routes_auth, routes_config, routes_stats
+from . import routes_admin, routes_auth, routes_config, routes_stats
 
 log = logging.getLogger(__name__)
 
@@ -96,7 +96,7 @@ def create_app() -> FastAPI:
     def health():
         return {"status": "ok", "version": __version__}
 
-    for module in (routes_auth, routes_config, routes_stats):
+    for module in (routes_auth, routes_config, routes_stats, routes_admin):
         app.include_router(module.router, prefix="/api")
 
     @app.api_route("/api/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"], include_in_schema=False)
