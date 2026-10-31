@@ -8,7 +8,13 @@ if [ "$(id -u)" = "0" ]; then
     exec setpriv --reuid=asstats --regid=asstats --init-groups "$0" "$@"
 fi
 
-# Create the schema and the first admin account once, before both services start.
-asstats init
+# Create or migrate the schema before the service starts. This is safe when web and
+# collector run as separate containers and start together: setup is serialized by a
+# lock in the database. Only the web side creates the first admin account, so its
+# password ends up in the web container's log.
+case "$1 $2" in
+    "asstats collector") asstats init --schema-only ;;
+    *) asstats init ;;
+esac
 
 exec "$@"
