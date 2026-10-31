@@ -122,27 +122,33 @@ export function LinkEditor({ draft, exporters, onClose }: { draft: Draft; export
         <div className="pt-6">
           <Toggle checked={d.enabled} onChange={(v) => set({ enabled: v })} label="Count traffic on this link" />
         </div>
-        <Field label="Capacity" hint="Optional, per direction. Shows how full the link is on the Links page.">
+        <div>
+          <label htmlFor="link-capacity" className="mb-1 block text-[13px] font-medium text-ink-2">
+            Capacity
+          </label>
           <div className="flex gap-2">
             <Input
+              id="link-capacity"
               type="number"
               min={0}
               step="any"
               placeholder="Not set"
+              aria-describedby="link-capacity-hint"
+              className="min-w-0 flex-1"
               value={capValue}
               onChange={(e) => set({ capacity_mbit: e.target.value ? Math.round(Number(e.target.value) * capUnit) || null : null })}
             />
-            <Select
-              aria-label="Capacity unit"
-              className="w-28 shrink-0"
-              value={capUnit}
-              onChange={(e) => setCapUnit(Number(e.target.value) as 1 | 1000)}
-            >
-              <option value={1}>Mbit/s</option>
-              <option value={1000}>Gbit/s</option>
-            </Select>
+            <div className="w-28 shrink-0">
+              <Select aria-label="Capacity unit" value={capUnit} onChange={(e) => setCapUnit(Number(e.target.value) as 1 | 1000)}>
+                <option value={1}>Mbit/s</option>
+                <option value={1000}>Gbit/s</option>
+              </Select>
+            </div>
           </div>
-        </Field>
+          <p id="link-capacity-hint" className="mt-1 text-[12.5px] text-muted">
+            Optional, per direction. Shows how full the link is on the Links page.
+          </p>
+        </div>
       </div>
 
       <div className="mt-6">
