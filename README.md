@@ -81,12 +81,12 @@ normal Docker network. That is what `docker-compose.yml` does. With `docker run`
 
 ```sh
 # web UI, API and background jobs
-docker run -d --name asstats-web -p 8080:8080 \
+docker run -d --name as-stats-web -p 8080:8080 \
   -v asstats-data:/data --restart unless-stopped \
   ghcr.io/schadom/as-stats-python:latest asstats web
 
 # flow collector, on the host network
-docker run -d --name asstats-collector --network host \
+docker run -d --name as-stats-collector --network host \
   -e ASSTATS_NETFLOW_PORT=9000 -e ASSTATS_SFLOW_PORT=6343 \
   -v asstats-data:/data --restart unless-stopped \
   ghcr.io/schadom/as-stats-python:latest asstats collector
@@ -142,8 +142,9 @@ git pull                     # new docker-compose.yml with web and collector
 docker compose up -d --build
 ```
 
-The data volume keeps its name, so statistics, settings and users carry over. Use `web` instead of `asstats` in
-`docker compose logs` and `docker compose exec` from now on. With `docker run`, stop the old container and start the two
+The data volume keeps its name, so statistics, settings and users carry over. The containers are now called
+`as-stats-web` and `as-stats-collector`; in `docker compose logs` and `docker compose exec`, use the service names `web`
+and `collector` instead of `asstats`. With `docker run`, stop the old container and start the two
 containers above with the same volume. Keeping a single container works as well; nothing forces the switch.
 
 ## Router configuration

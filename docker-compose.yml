@@ -12,6 +12,7 @@ services:
   web:
     build: .
     image: as-stats-python:latest
+    container_name: as-stats-web
     command: ["asstats", "web"]
     restart: unless-stopped
     ports:
@@ -28,6 +29,7 @@ services:
   collector:
     build: .
     image: as-stats-python:latest
+    container_name: as-stats-collector
     command: ["asstats", "collector"]
     restart: unless-stopped
     network_mode: host
