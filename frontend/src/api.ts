@@ -73,7 +73,11 @@ export interface LinkMeta {
   sort_order: number;
   /** Mbit/s per direction, optional. Missing on servers older than this frontend. */
   capacity_mbit?: number | null;
+  /** Missing on servers older than this frontend: treat as "other". */
+  link_type?: LinkType;
 }
+
+export type LinkType = "transit" | "ix" | "pni" | "other";
 
 export interface Meta {
   version: string;
@@ -160,6 +164,32 @@ export interface AsPrefixes {
   total: { in: number; out: number };
   other: InOutLinks;
   prefixes: (InOutLinks & { prefix: string })[];
+}
+
+export type SymmetryKind = "in_peer_out_transit" | "in_transit_out_peer" | "asymmetric" | "ok";
+
+export interface SymmetryItem extends AsMeta {
+  asn: number;
+  kind: SymmetryKind;
+  /** 1 = the same link mix in both directions, 0 = no link in common. */
+  score: number;
+  in: number;
+  out: number;
+  in_links: Record<string, number>;
+  out_links: Record<string, number>;
+  peering_in: number;
+  peering_out: number;
+  /** First hour of the current mismatch (IX vs transit only), up to 14 days back. */
+  since: number | null;
+}
+
+export interface SymmetryResponse {
+  start: number;
+  end: number;
+  min_mb: number;
+  types_set: boolean;
+  summary: { mismatches: number; affected: number; asymmetric: number; symmetric_peering: number; compared: number };
+  items: SymmetryItem[];
 }
 
 export interface IxList {

@@ -20,6 +20,8 @@ receive how much traffic over which of my links?
 - **AS detail** pages with interactive charts per link or per IP version, per-link totals and shared IX presence.
   Optionally, the remote prefixes of the AS your network talked to (prefix statistics, off by default).
 - **Links** overview: all links stacked, and which ASes use each link.
+- **Routing symmetry**: compares which of your links each AS uses inbound and outbound, and flags ASes that send
+  via an IX but get your traffic via transit (or the other way round), with likely causes.
 - **Internet exchanges** from PeeringDB: the IXs your AS is present at, with traffic per member. Useful for finding peering candidates you currently reach over transit.
 - **AS names** looked up automatically through the RIPEstat API (all RIRs), with country, PeeringDB names and your own overrides.
 - **Users and roles**: administrators and read-only users. Nothing is visible without logging in.
@@ -209,6 +211,20 @@ the sFlow extended gateway path). The IP lookup always yields the origin AS.
 Traffic is stored in 5 minute buckets by arrival time. Completed hours and days are rolled up into hourly and daily
 tables, and queries combine them automatically. Default retention: 3 days at 5 minutes, 90 days hourly, 5 years daily,
 changeable under **General**.
+
+### Routing symmetry
+
+Give every link a **Link type** (Transit, IX, PNI or Other) under **Links & interfaces**. The *Routing symmetry* page
+then compares, per AS and over the selected range, the share of its inbound and outbound traffic on each link:
+
+- **IX vs transit**: one direction mostly via peering (IX or PNI), the other mostly via transit. This usually means a
+  missing or filtered BGP session, a local-preference mistake, or a missing announcement on one side. Each case
+  says which side is affected, what typically causes it and for how long it has been going on (from hourly data,
+  up to 14 days back). The sidebar shows how many there are in the last 24 hours, and the AS page shows a note.
+- **Asymmetric**: a different link mix in each direction otherwise, for example two transits. Usually harmless.
+
+ASes need traffic in both directions and at least 100 MB in the range (adjustable on the page). Links of type
+*Other*, the default for existing links, count neither as peering nor as transit.
 
 ### Prefix statistics (optional)
 

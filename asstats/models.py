@@ -108,6 +108,8 @@ class Link(Base):
     created_at: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     # Optional, in Mbit/s per direction. Only used to show how full the link is.
     capacity_mbit: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # transit, ix, pni or other; tells the routing symmetry view what kind of link this is
+    link_type: Mapped[str] = mapped_column(String(8), nullable=False, default="other", server_default="other")
 
     interfaces: Mapped[list["LinkInterface"]] = relationship(
         back_populates="link",

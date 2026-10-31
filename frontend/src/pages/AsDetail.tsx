@@ -1,13 +1,14 @@
 import { useMemo, useState } from "react";
-import { useParams } from "react-router";
+import { Link, useParams } from "react-router";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { get, patch, post, type AsDetail as AsDetailT, type SeriesResponse } from "../api";
 import { ChartLegend, TrafficChart, bucketSeconds, layersByFamily, layersByLink } from "../components/charts";
 import { AsPrefixes } from "../components/AsPrefixes";
+import { finding, useSymmetry } from "../symmetry";
 import { FilterBar } from "../components/Layout";
 import { Badge, Button, Empty, ErrorNote, Field, Input, LinkDot, Loading, Modal, Panel, Segmented, td, th } from "../components/ui";
 import { avgBps, bps, bytes, rangeLabel, speed } from "../format";
-import { filterQuery, useFilters, useSession } from "../state";
+import { filterQuery, navQuery, useFilters, useSession } from "../state";
 
 function Rename({ data, onClose }: { data: AsDetailT; onClose: () => void }) {
   const qc = useQueryClient();
@@ -60,6 +61,9 @@ export default function AsDetail() {
     placeholderData: keepPreviousData,
     refetchInterval: 60_000,
   });
+  const typed = meta.links.some((l) => l.link_type && l.link_type !== "other");
+  const sym = useSymmetry(f, { asn }, typed && Number.isFinite(asn));
+  const symItem = sym.data?.items.find((i) => i.asn === asn && i.kind.startsWith("in_"));
   const refresh = useMutation({
     mutationFn: () => post(`/as/${asn}/refresh`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["as", asn] }),
@@ -136,6 +140,13 @@ export default function AsDetail() {
         {series.data && layers.length > 0 ? (
           <>
             <div className="mb-3 text-[13px] text-muted">{rangeLabel(d.start, d.end)}. Inbound is drawn above the line, outbound below.</div>
+            {symItem && (
+              <div className="mb-3 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-[13px]">
+                <span className="font-medium text-warn">Asymmetric: </span>
+                {finding(symItem, linkById)?.head}{" "}
+                <Link to={`/symmetry${navQuery(f)}#as${asn}`} className="font-medium text-accent hover:underline">Details</Link>
+              </div>
+            )}
             <TrafficChart layers={layers} buckets={series.data.buckets} seconds={seconds} height={340} />
             <div className="mt-3">
               <ChartLegend layers={layers} seconds={duration} />
