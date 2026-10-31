@@ -1,15 +1,15 @@
 # AS-Stats with the built-in SQLite database, as two containers from the same image:
 #
-#   web        web UI, API and background jobs, on a normal Docker network
-#   collector  receives NetFlow/IPFIX/sFlow on the host network, so it sees the
-#              real source address of your routers. With published ports Docker
-#              may rewrite it to its gateway address (172.17.0.1), and all routers
-#              would look like a single exporter.
+#   as-stats-web        web UI, API and background jobs, on a normal Docker network
+#   as-stats-collector  receives NetFlow/IPFIX/sFlow on the host network, so it
+#                       sees the real source address of your routers. With published
+#                       ports Docker may rewrite it to its gateway address
+#                       (172.17.0.1), and all routers would look like one exporter.
 #
 # Both share the data volume: SQLite database, IP-to-AS table, template cache.
 # For MariaDB use docker-compose.mariadb.yml. Behind a reverse proxy: see README.
 services:
-  web:
+  as-stats-web:
     build: .
     image: as-stats-python:latest
     container_name: as-stats-web
@@ -26,7 +26,7 @@ services:
       # Set to true when the UI is served over HTTPS (reverse proxy).
       # ASSTATS_COOKIE_SECURE: "true"
 
-  collector:
+  as-stats-collector:
     build: .
     image: as-stats-python:latest
     container_name: as-stats-collector
@@ -34,7 +34,7 @@ services:
     restart: unless-stopped
     network_mode: host
     depends_on:
-      - web
+      - as-stats-web
     volumes:
       - asstats-data:/data
     environment:

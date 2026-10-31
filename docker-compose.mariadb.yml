@@ -6,7 +6,7 @@
 # host networking to see the routers' real addresses and reaches MariaDB on
 # localhost, where it is published (127.0.0.1 only).
 services:
-  web:
+  as-stats-web:
     build: .
     image: as-stats-python:latest
     container_name: as-stats-web
@@ -25,7 +25,7 @@ services:
       # ASSTATS_ADMIN_PASSWORD: change-me
       # ASSTATS_COOKIE_SECURE: "true"
 
-  collector:
+  as-stats-collector:
     build: .
     image: as-stats-python:latest
     container_name: as-stats-collector
@@ -35,7 +35,7 @@ services:
     depends_on:
       mariadb:
         condition: service_healthy
-      web:
+      as-stats-web:
         condition: service_started
     volumes:
       - asstats-data:/data         # IP-to-AS table and template cache

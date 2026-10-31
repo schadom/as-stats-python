@@ -38,11 +38,11 @@ receive how much traffic over which of my links?
 git clone https://github.com/schadom/as-stats-python
 cd as-stats-python
 docker compose up -d
-docker compose logs web | grep -A1 "initial admin"
+docker compose logs as-stats-web | grep -A1 "initial admin"
 ```
 
-The compose file runs two containers from the same image: `web` serves the UI on port 8080 and runs the background jobs,
-`collector` receives the flows on the host network (Linux), see
+The compose file runs two containers from the same image: `as-stats-web` serves the UI on port 8080 and runs the
+background jobs, `as-stats-collector` receives the flows on the host network (Linux), see
 [Keep the router's source address](#keep-the-routers-source-address). They share the data volume.
 Open <http://your-host:8080>, log in as `admin` with the password from the log, and choose a new one.
 To set the first password yourself, set `ASSTATS_ADMIN_PASSWORD` before the first start.
@@ -109,12 +109,12 @@ docker run -d --name asstats --network host \
 ### Behind a reverse proxy
 
 With the web UI in its own container, a reverse proxy that discovers containers on a Docker network
-(such as [nginx-proxy](https://github.com/nginx-proxy/nginx-proxy) or Traefik) can serve it over HTTPS. Put the `web`
-service on the proxy's network instead of publishing port 8080, for example with a `docker-compose.override.yml`:
+(such as [nginx-proxy](https://github.com/nginx-proxy/nginx-proxy) or Traefik) can serve it over HTTPS. Put the
+`as-stats-web` service on the proxy's network instead of publishing port 8080, for example with a `docker-compose.override.yml`:
 
 ```yaml
 services:
-  web:
+  as-stats-web:
     ports: !reset []
     networks: [proxy]
     environment:
@@ -138,13 +138,13 @@ Installations from before the split run one `asstats` container. To move to two:
 
 ```sh
 docker compose down          # stops the old single container
-git pull                     # new docker-compose.yml with web and collector
+git pull                     # new docker-compose.yml with as-stats-web and as-stats-collector
 docker compose up -d --build
 ```
 
-The data volume keeps its name, so statistics, settings and users carry over. The containers are now called
-`as-stats-web` and `as-stats-collector`; in `docker compose logs` and `docker compose exec`, use the service names `web`
-and `collector` instead of `asstats`. With `docker run`, stop the old container and start the two
+The data volume keeps its name, so statistics, settings and users carry over. The services and containers are now
+called `as-stats-web` and `as-stats-collector`; use these names instead of `asstats` in `docker compose logs` and
+`docker compose exec`. With `docker run`, stop the old container and start the two
 containers above with the same volume. Keeping a single container works as well; nothing forces the switch.
 
 ## Router configuration
@@ -311,8 +311,8 @@ share, the links used and a link to bgp.tools.
 Import your existing `knownlinks` file to create exporters and links in one step:
 
 ```sh
-docker compose cp knownlinks web:/data/knownlinks
-docker compose exec web asstats import-knownlinks /data/knownlinks
+docker compose cp knownlinks as-stats-web:/data/knownlinks
+docker compose exec as-stats-web asstats import-knownlinks /data/knownlinks
 ```
 
 Exporters are created with their IP as name, rename them in the UI. RRD history is not imported.
@@ -347,7 +347,7 @@ Administrators manage links, exporters, users and settings. Read-only users see 
 administrator must be changed at the next login. If you lock yourself out:
 
 ```sh
-docker compose exec web asstats user reset-password admin
+docker compose exec as-stats-web asstats user reset-password admin
 ```
 
 ## Architecture
