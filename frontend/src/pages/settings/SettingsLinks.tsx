@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { del, get, post, put, type Discovered, type Exporter, type LinkFull, type LinkIface } from "../../api";
 import { Badge, Button, Empty, ErrorNote, Field, Input, LinkDot, Loading, Modal, PageHeader, Panel, Select, Toggle, cx, td, th } from "../../components/ui";
-import { ago, bps } from "../../format";
+import { ago, bps, speed } from "../../format";
 import { ExporterModal } from "./SettingsExporters";
 
 export const PALETTE = ["#3d7be0", "#e0703d", "#2fa37a", "#a35bd6", "#d64570", "#c9a227", "#3fb3c9", "#7a8b2e", "#8a5a44", "#5c6bc0"];
@@ -23,6 +23,7 @@ interface Draft {
   color: string;
   sort_order: number;
   enabled: boolean;
+  capacity_mbit?: number | null;
   interfaces: LinkIface[];
 }
 
@@ -45,6 +46,7 @@ export function LinkEditor({ draft, exporters, onClose }: { draft: Draft; export
         color: d.color,
         sort_order: d.sort_order,
         enabled: d.enabled,
+        capacity_mbit: d.capacity_mbit || null,
         interfaces: d.interfaces.map((i) => ({ exporter_id: i.exporter_id, ifindex: i.ifindex, sampling_rate: i.sampling_rate || null })),
       };
       return d.id ? put(`/links/${d.id}`, body) : post("/links", body);
@@ -54,6 +56,9 @@ export function LinkEditor({ draft, exporters, onClose }: { draft: Draft; export
       onClose();
     },
   });
+  // Capacity is stored in Mbit/s; edit it in Gbit/s when it is a whole number of those.
+  const [capUnit, setCapUnit] = useState<1 | 1000>(draft.capacity_mbit && draft.capacity_mbit % 1000 === 0 ? 1000 : 1);
+  const capValue = d.capacity_mbit ? d.capacity_mbit / capUnit : "";
   const setIface = (idx: number, patch: Partial<LinkIface>) =>
     set({ interfaces: d.interfaces.map((i, k) => (k === idx ? { ...i, ...patch } : i)) });
 
@@ -117,6 +122,27 @@ export function LinkEditor({ draft, exporters, onClose }: { draft: Draft; export
         <div className="pt-6">
           <Toggle checked={d.enabled} onChange={(v) => set({ enabled: v })} label="Count traffic on this link" />
         </div>
+        <Field label="Capacity" hint="Optional, per direction. Shows how full the link is on the Links page.">
+          <div className="flex gap-2">
+            <Input
+              type="number"
+              min={0}
+              step="any"
+              placeholder="Not set"
+              value={capValue}
+              onChange={(e) => set({ capacity_mbit: e.target.value ? Math.round(Number(e.target.value) * capUnit) || null : null })}
+            />
+            <Select
+              aria-label="Capacity unit"
+              className="w-28 shrink-0"
+              value={capUnit}
+              onChange={(e) => setCapUnit(Number(e.target.value) as 1 | 1000)}
+            >
+              <option value={1}>Mbit/s</option>
+              <option value={1000}>Gbit/s</option>
+            </Select>
+          </div>
+        </Field>
       </div>
 
       <div className="mt-6">
@@ -312,6 +338,7 @@ export default function SettingsLinks() {
                     <span className="font-semibold">{l.name}</span>
                     <span className="text-[13px] text-muted">{l.tag}</span>
                     {!l.enabled && <Badge tone="warn">Paused</Badge>}
+                    {l.capacity_mbit ? <Badge>{speed(l.capacity_mbit)}</Badge> : null}
                   </div>
                   <div className="mt-1 flex flex-wrap gap-1.5">
                     {l.interfaces.length === 0 && <span className="text-[13px] text-warn">No interfaces, nothing is counted</span>}

@@ -1,9 +1,10 @@
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { Link } from "react-router";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { get, type SeriesResponse, type UsageResponse } from "../api";
+import { get, type LinkFull, type SeriesResponse, type UsageResponse } from "../api";
 import { ChartLegend, TrafficChart, bucketSeconds, layersByLink } from "../components/charts";
 import { FilterBar } from "../components/Layout";
+import { LinkPipes } from "../components/LinkPipes";
 import { Empty, ErrorNote, LinkDot, Loading, PageHeader, Panel } from "../components/ui";
 import { avgBps, bps, bytes, pct, rangeLabel } from "../format";
 import { filterQuery, navQuery, useFilters, useSession } from "../state";
@@ -22,6 +23,9 @@ export default function Links() {
     queryFn: () => get<UsageResponse>(`/links/usage?${filterQuery({ ...f, links: [] })}`),
     placeholderData: keepPreviousData,
   });
+  const linksFull = useQuery({ queryKey: ["links-full"], queryFn: () => get<LinkFull[]>("/links"), staleTime: 60_000 });
+  const linkFilter = f.links.join(",");
+  const isVisible = useCallback((id: number) => !linkFilter || linkFilter.split(",").map(Number).includes(id), [linkFilter]);
   const layers = useMemo(() => (series.data ? layersByLink(series.data, f.ip, linkById) : []), [series.data, f.ip, linkById]);
   const seconds = useMemo(() => (series.data ? bucketSeconds(series.data) : []), [series.data]);
   const q = navQuery(f);
@@ -54,6 +58,17 @@ export default function Links() {
             </div>
           </>
         ) : series.isLoading ? (
+          <Loading />
+        ) : (
+          <Empty title="No traffic in this range" />
+        )}
+      </Panel>
+
+      <Panel title="Link utilization" className="mt-5">
+        {usage.error && <ErrorNote error={usage.error} />}
+        {usage.data && visible.length > 0 ? (
+          <LinkPipes usage={usage.data} links={linksFull.data} linkById={linkById} visible={isVisible} />
+        ) : usage.isLoading ? (
           <Loading />
         ) : (
           <Empty title="No traffic in this range" />

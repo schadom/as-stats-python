@@ -71,6 +71,8 @@ export interface LinkMeta {
   color: string;
   enabled: boolean;
   sort_order: number;
+  /** Mbit/s per direction, optional. Missing on servers older than this frontend. */
+  capacity_mbit?: number | null;
 }
 
 export interface Meta {
