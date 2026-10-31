@@ -1,26 +1,46 @@
-# AS-Stats with the built-in SQLite database.
-# For MariaDB use docker-compose.mariadb.yml instead.
+# AS-Stats with the built-in SQLite database, as two containers from the same image:
 #
-# Host networking is used so the collector sees the real source address of
-# your routers. With published ports, Docker may rewrite it to its gateway
-# address (172.17.0.1), and all routers then look like a single exporter.
+#   as-stats-web        web UI, API and background jobs, on a normal Docker network
+#   as-stats-collector  receives NetFlow/IPFIX/sFlow on the host network, so it
+#                       sees the real source address of your routers. With published
+#                       ports Docker may rewrite it to its gateway address
+#                       (172.17.0.1), and all routers would look like one exporter.
+#
+# Both share the data volume: SQLite database, IP-to-AS table, template cache.
+# For MariaDB use docker-compose.mariadb.yml. Behind a reverse proxy: see README.
 services:
-  asstats:
+  as-stats-web:
     build: .
     image: as-stats-python:latest
+    container_name: as-stats-web
+    command: ["asstats", "web"]
     restart: unless-stopped
-    network_mode: host
+    ports:
+      - "8080:8080"                  # web UI
     volumes:
       - asstats-data:/data
     environment:
       TZ: Europe/Vienna
-      ASSTATS_WEB_PORT: "8080"       # web UI
-      ASSTATS_NETFLOW_PORT: "9000"   # NetFlow v5/v9 and IPFIX (UDP)
-      ASSTATS_SFLOW_PORT: "6343"     # sFlow v5 (UDP)
-      # Without a password a random one is generated and printed to the log.
+      # Without a password a random one is generated and printed to this container's log.
       # ASSTATS_ADMIN_PASSWORD: change-me
       # Set to true when the UI is served over HTTPS (reverse proxy).
       # ASSTATS_COOKIE_SECURE: "true"
+
+  as-stats-collector:
+    build: .
+    image: as-stats-python:latest
+    container_name: as-stats-collector
+    command: ["asstats", "collector"]
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      - as-stats-web
+    volumes:
+      - asstats-data:/data
+    environment:
+      TZ: Europe/Vienna
+      ASSTATS_NETFLOW_PORT: "9000"   # NetFlow v5/v9 and IPFIX (UDP)
+      ASSTATS_SFLOW_PORT: "6343"     # sFlow v5 (UDP)
 
 volumes:
   asstats-data:
