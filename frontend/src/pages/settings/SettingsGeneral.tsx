@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { DangerZone } from "./DangerZone";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { get, put, type Settings } from "../../api";
 import { Button, ErrorNote, Field, Input, Loading, PageHeader, Panel, Select, Toggle } from "../../components/ui";
@@ -26,6 +27,7 @@ export default function SettingsGeneral() {
   const num = (v: string) => (v === "" ? 0 : Number(v));
 
   return (
+    <>
     <form
       onSubmit={(e) => {
         e.preventDefault();
@@ -117,5 +119,7 @@ export default function SettingsGeneral() {
         </Panel>
       </div>
     </form>
+    <DangerZone />
+    </>
   );
 }
