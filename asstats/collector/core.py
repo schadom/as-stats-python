@@ -25,6 +25,7 @@ from ..models import (
 )
 from ..ipasn import FILENAME as IPASN_FILE
 from ..ipasn import IpAsnTable, load_binary, prefix_for
+from .bogons import is_non_internet_v4, is_non_internet_v6
 from .netflow import DecodeError, NetflowDecoder
 from .sflow import SflowDecoder
 
@@ -85,7 +86,7 @@ def load_linkmap(engine: Engine) -> LinkMap:
 class Snapshot:
     """Counters accumulated between two flushes."""
 
-    __slots__ = ("traffic", "links", "prefixes", "ifaces", "exporters", "started")
+    __slots__ = ("traffic", "links", "prefixes", "ifaces", "exporters", "ignored", "started")
 
     def __init__(self) -> None:
         self.traffic: dict[tuple[int, int, int], list[int]] = {}
@@ -95,6 +96,8 @@ class Snapshot:
         self.ifaces: dict[tuple[str, int], list[int]] = {}
         # ip -> [protocol, version, packets, flows, errors, rejected]
         self.exporters: dict[str, list] = {}
+        # link-side accountings skipped because the remote address is not on the Internet
+        self.ignored = 0
         self.started = time.time()
 
 
@@ -114,6 +117,7 @@ class Collector:
         self._asn_cache: dict[int | bytes, int] = {}
         self._prefix_cache: dict[int | bytes, str] = {}
         self.prefix_enabled = False
+        self.ignore_non_internet = True
         template_file = (data_dir / "templates.json") if data_dir else None
         self.netflow = NetflowDecoder(template_file)
         self.sflow = SflowDecoder()
@@ -141,6 +145,10 @@ class Collector:
         with self.engine.connect() as conn:
             version = appsettings.get_value(conn, appsettings.CONFIG_VERSION, 0)
             prefix_enabled = bool(appsettings.get_value(conn, "prefix_enabled"))
+            ignore = bool(appsettings.get_value(conn, "ignore_non_internet"))
+        if ignore != self.ignore_non_internet:
+            log.info("non-internet addresses are %s", "ignored" if ignore else "counted")
+            self.ignore_non_internet = ignore
         if prefix_enabled != self.prefix_enabled:
             log.info("prefix statistics %s", "enabled" if prefix_enabled else "disabled")
             self.prefix_enabled = prefix_enabled
@@ -260,6 +268,8 @@ class Collector:
         now = int(time.time())
         bucket = now // BUCKET * BUCKET
         prefixes = snap.prefixes if self.prefix_enabled else None
+        ignore = self.ignore_non_internet
+        ignored = 0
         hour = now // PREFIX_BUCKET * PREFIX_BUCKET
         prefix_of = self.lookup_prefix
 
@@ -300,6 +310,10 @@ class Collector:
                 continue
 
             hit = ifmap.get((ip, in_if))
+            # only the remote side decides: local addresses may well be private (CGNAT, NAT before export)
+            if hit is not None and ignore and src_addr and (is_non_internet_v6(src_addr) if v6 else is_non_internet_v4(src_addr)):
+                hit = None
+                ignored += 1
             if hit is not None:
                 link_id, override = hit
                 b = nbytes * override if override else scaled
@@ -325,6 +339,9 @@ class Collector:
                 c[col] += b
 
             hit = ifmap.get((ip, out_if))
+            if hit is not None and ignore and dst_addr and (is_non_internet_v6(dst_addr) if v6 else is_non_internet_v4(dst_addr)):
+                hit = None
+                ignored += 1
             if hit is not None:
                 link_id, override = hit
                 b = nbytes * override if override else scaled
@@ -348,6 +365,7 @@ class Collector:
                 if c is None:
                     c = links[lkey] = [0, 0, 0, 0]
                 c[col] += b
+        snap.ignored += ignored
         return rejected
 
     # ------------------------------------------------------------ flushing
@@ -487,6 +505,7 @@ class Collector:
                     "missing_template": self.netflow.missing_template,
                     "ipasn_ranges": len(self.ipasn) if self.ipasn is not None else 0,
                     "ipasn_mtime": int(self.ipasn.mtime) if self.ipasn is not None else None,
+                    "ignored_per_sec": round(snap.ignored / window, 1),
                 },
             )
         self.known_asns |= new_asns

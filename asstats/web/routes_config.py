@@ -90,6 +90,7 @@ class SettingsIn(BaseModel):
     prefix_retention_days: int | None = Field(default=None, ge=1, le=3650)
     prefix_min_mb_hour: float | None = Field(default=None, ge=0, le=100_000)
     prefix_max_per_as: int | None = Field(default=None, ge=1, le=1000)
+    ignore_non_internet: bool | None = None
     ipasn_enabled: bool | None = None
     ipasn_url: str | None = Field(default=None, max_length=512, pattern=r"^https?://")
 

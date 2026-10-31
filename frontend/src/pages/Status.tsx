@@ -39,6 +39,9 @@ export default function Status() {
             <Row label="Flows per second">{hb?.flows_per_sec ?? 0}</Row>
             <Row label="Exporters sending">{hb?.exporters ?? 0}</Row>
             <Row label="Flows dropped, template not yet known">{hb?.missing_template ?? 0}</Row>
+            {hb?.ignored_per_sec !== undefined && (
+              <Row label="Ignored per second, non-internet address">{hb.ignored_per_sec}</Row>
+            )}
           </dl>
           {stale && <p className="mt-3 text-[13px] text-muted">The collector writes once a minute. Check its log if this stays red.</p>}
         </Panel>

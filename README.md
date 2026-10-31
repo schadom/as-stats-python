@@ -182,6 +182,13 @@ For every flow:
 - if the input interface belongs to a link, the bytes count as **inbound** on that link for the **source AS**;
 - if the output interface belongs to a link, they count as **outbound** on that link for the **destination AS**.
 
+Flows whose **remote** address (the source for inbound, the destination for outbound) is not on the Internet are
+ignored by default: private ranges (RFC 1918, CGNAT 100.64.0.0/10, IPv6 ULA), link-local, multicast, documentation
+and other reserved ranges. That is router housekeeping such as IPv6 neighbor discovery, router advertisements or
+link-local BGP sessions. Local addresses may be private, and IX peering LANs are public, so both are still counted.
+Flows without addresses are never filtered. The switch is under **General**, and the Collector status page shows
+how many flows are ignored.
+
 Bytes are multiplied by the sampling rate. The rate comes from, in order: the interface override on the link, the exporter
 setting, the rate the router announces, or 1.
 

@@ -193,7 +193,7 @@ def test_ip_lookup_for_exporters_without_as(engine, tmp_path):
     pkt4 = _v9_custom(VYOS_V4, [
         vyos_record(VYOS_V4, 10, 99, "8.8.8.8", "192.0.2.7", 1000),   # inbound from Google
         vyos_record(VYOS_V4, 99, 10, "192.0.2.7", "1.1.1.1", 300),    # outbound to Cloudflare
-        vyos_record(VYOS_V4, 10, 99, "10.1.2.3", "192.0.2.7", 50),    # not routed -> AS 0
+        vyos_record(VYOS_V4, 10, 99, "193.203.0.9", "192.0.2.7", 50), # IX LAN, not announced -> AS 0
     ])
     col.handle_netflow(pkt4, IP)
     import struct
@@ -273,3 +273,49 @@ def test_migration_adds_link_capacity_column(tmp_path):
     migrate(eng)  # idempotent
     with eng.connect() as conn:
         assert conn.execute(text("SELECT capacity_mbit FROM links")).scalar_one() is None
+
+
+def test_non_internet_addresses_are_ignored(engine, tmp_path):
+    """Link-local, multicast and private remote addresses are router housekeeping, not AS traffic."""
+    from asstats import appsettings
+
+    transit, _ = setup_links()
+    ipasn_table(tmp_path)
+
+    def run():
+        with engine.begin() as conn:
+            conn.execute(TRAFFIC[300].delete())
+        col = Collector(engine, tmp_path)
+        col.maybe_reload(force=True)
+        col.maybe_load_ipasn()
+        col.handle_netflow(build_v9([
+            Flow(10, 99, 0, 0, 1000, src_ip="8.8.8.8", dst_ip="10.0.0.5"),        # private LOCAL side: counted
+            Flow(10, 99, 0, 0, 100, src_ip="10.9.9.9", dst_ip="192.0.2.7"),       # RFC 1918 remote
+            Flow(10, 99, 0, 0, 100, src_ip="169.254.0.1", dst_ip="192.0.2.7"),    # link-local
+            Flow(99, 10, 0, 0, 100, src_ip="192.0.2.7", dst_ip="224.0.0.5"),      # multicast (OSPF)
+            Flow(99, 10, 0, 0, 100, src_ip="192.0.2.7", dst_ip="100.64.1.1"),     # CGNAT space
+            Flow(10, 99, 0, 0, 7, src_ip="193.203.0.9", dst_ip="192.0.2.7"),      # IX LAN: public, still counted
+            Flow(10, 99, 2906, 0, 5),                                              # no addresses at all: counted
+            Flow(10, 99, 0, 0, 100, v6=True, src_ip="fe80::1", dst_ip="2001:db8::7"),   # link-local v6
+            Flow(99, 10, 0, 0, 100, v6=True, src_ip="2001:db8::7", dst_ip="ff02::1"),   # multicast v6
+            Flow(10, 99, 0, 0, 100, v6=True, src_ip="fd00::1", dst_ip="2001:db8::7"),   # ULA
+            Flow(10, 99, 0, 0, 300, v6=True, src_ip="2606:4700::1111", dst_ip="fe80::2"),  # link-local LOCAL side: counted
+        ]), IP)
+        col.flush(*col.take_snapshot())
+        with engine.connect() as conn:
+            beat = appsettings.get_value(conn, appsettings.COLLECTOR_HEARTBEAT)
+        return traffic_rows(engine), beat
+
+    rows, beat = run()
+    assert rows == {
+        (transit, 15169): (1000, 0, 0, 0),
+        (transit, 0): (7, 0, 0, 0),
+        (transit, 2906): (5, 0, 0, 0),
+        (transit, 13335): (0, 0, 300, 0),
+    }
+    assert beat["ignored_per_sec"] > 0
+
+    with engine.begin() as conn:
+        appsettings.set_value(conn, "ignore_non_internet", False)
+    rows, _ = run()
+    assert rows[(transit, 0)][0] == 7 + 200 and rows[(transit, 0)][1] == 200  # counted again as unknown
