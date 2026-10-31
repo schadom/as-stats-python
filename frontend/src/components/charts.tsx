@@ -1,13 +1,13 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as echarts from "echarts/core";
-import { LineChart } from "echarts/charts";
+import { LineChart, ScatterChart } from "echarts/charts";
 import { DataZoomComponent, GridComponent, TooltipComponent } from "echarts/components";
 import { CanvasRenderer } from "echarts/renderers";
 import type { SeriesResponse } from "../api";
 import { bps, bpsAxis, bytes as fmtBytes } from "../format";
 import { useIsDark, useSession, type IpFilter } from "../state";
 
-echarts.use([LineChart, GridComponent, TooltipComponent, DataZoomComponent, CanvasRenderer]);
+echarts.use([LineChart, ScatterChart, GridComponent, TooltipComponent, DataZoomComponent, CanvasRenderer]);
 
 /** One stacked layer of a mirrored chart: bytes per bucket, inbound and outbound. */
 export interface Layer {
@@ -16,6 +16,46 @@ export interface Layer {
   color: string;
   inn: number[];
   out: number[];
+}
+
+// ---------------------------------------------------------------- spike-aware scaling
+
+/** Round up to a value that makes clean axis labels: 1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8 times a power of ten. */
+export function niceCeil(v: number): number {
+  if (v <= 0) return 0;
+  const p = 10 ** Math.floor(Math.log10(v));
+  const f = v / p;
+  const step = [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10].find((s) => s >= f - 1e-9) ?? 10;
+  return step * p;
+}
+
+/**
+ * Scale limit that ignores short spikes, or null when the data has none.
+ *
+ * A spike is a peak more than 3x the 95th percentile of the non-zero values. The limit
+ * is then 1.5x that percentile, so normal traffic fills the chart and the few spike
+ * buckets run off the edge. Steady traffic (a daily curve, a plateau) is never cut.
+ */
+export function spikeLimit(values: number[]): number | null {
+  const v = values.filter((x) => x > 0).sort((a, b) => a - b);
+  if (v.length < 12) return null; // too little traffic to call anything a spike
+  const p95 = v[Math.floor((v.length - 1) * 0.95)];
+  const peak = v[v.length - 1];
+  if (p95 <= 0 || peak <= p95 * 3) return null;
+  return niceCeil(p95 * 1.5);
+}
+
+/** Stacked inbound and outbound totals in bits per second, per bucket. */
+function stackedRates(layers: Layer[], seconds: number[]): [number[], number[]] {
+  const tin = new Array(seconds.length).fill(0);
+  const tout = new Array(seconds.length).fill(0);
+  for (const l of layers) {
+    for (let i = 0; i < seconds.length; i++) {
+      tin[i] += (l.inn[i] * 8) / seconds[i];
+      tout[i] += (l.out[i] * 8) / seconds[i];
+    }
+  }
+  return [tin, tout];
 }
 
 /** Seconds covered by each bucket (the newest one may be partial). */
@@ -111,10 +151,13 @@ export function MirrorSpark({
       cumIn.push(accIn);
       cumOut.push(accOut);
     }
-    const maxIn = Math.max(...accIn, 0);
-    const maxOut = Math.max(...accOut, 0);
+    // Short spikes are cut at the edge so the rest of the row stays readable.
+    const limIn = spikeLimit(accIn);
+    const limOut = spikeLimit(accOut);
+    const maxIn = limIn ?? Math.max(...accIn, 0);
+    const maxOut = limOut ?? Math.max(...accOut, 0);
     const total = maxIn + maxOut;
-    if (total <= 0) return { paths: [], axis: height / 2 };
+    if (total <= 0) return { paths: [], cuts: [], axis: height / 2 };
     const pad = 2;
     const usable = height - pad * 2;
     const scale = usable / total;
@@ -126,16 +169,22 @@ export function MirrorSpark({
       const baseIn = li ? cumIn[li - 1] : new Array(n).fill(0);
       const topOut = cumOut[li];
       const baseOut = li ? cumOut[li - 1] : new Array(n).fill(0);
-      const area = (top: number[], base: number[], sign: number) => {
-        let d = `M${x(0).toFixed(1)},${(axis - sign * top[0] * scale).toFixed(1)}`;
-        for (let i = 1; i < n; i++) d += `L${x(i).toFixed(1)},${(axis - sign * top[i] * scale).toFixed(1)}`;
-        for (let i = n - 1; i >= 0; i--) d += `L${x(i).toFixed(1)},${(axis - sign * base[i] * scale).toFixed(1)}`;
+      const area = (top: number[], base: number[], sign: number, lim: number) => {
+        const y = (v: number) => (axis - sign * Math.min(v, lim) * scale).toFixed(1);
+        let d = `M${x(0).toFixed(1)},${y(top[0])}`;
+        for (let i = 1; i < n; i++) d += `L${x(i).toFixed(1)},${y(top[i])}`;
+        for (let i = n - 1; i >= 0; i--) d += `L${x(i).toFixed(1)},${y(base[i])}`;
         return d + "Z";
       };
-      paths.push({ d: area(topIn, baseIn, 1), color: l.color });
-      paths.push({ d: area(topOut, baseOut, -1), color: l.color });
+      paths.push({ d: area(topIn, baseIn, 1, maxIn), color: l.color });
+      paths.push({ d: area(topOut, baseOut, -1, maxOut), color: l.color });
     });
-    return { paths, axis };
+    // Mark the buckets that were cut, as a short cap on the edge.
+    const half = n > 1 ? width / (n - 1) / 2 : width / 2;
+    const cuts: { x1: number; x2: number; y: number }[] = [];
+    accIn.forEach((v, i) => limIn !== null && v > limIn && cuts.push({ x1: x(i) - half, x2: x(i) + half, y: pad }));
+    accOut.forEach((v, i) => limOut !== null && v > limOut && cuts.push({ x1: x(i) - half, x2: x(i) + half, y: height - pad }));
+    return { paths, cuts, axis };
   }, [layers, seconds, height, width]);
 
   return (
@@ -144,6 +193,11 @@ export function MirrorSpark({
         <path key={i} d={p.d} fill={p.color} fillOpacity={i % 2 ? 0.55 : 0.85} />
       ))}
       <line x1="0" x2={width} y1={shapes?.axis ?? height / 2} y2={shapes?.axis ?? height / 2} stroke="var(--c-axis)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+      {shapes?.cuts.map((c, i) => (
+        <line key={`c${i}`} x1={c.x1} x2={c.x2} y1={c.y} y2={c.y} stroke="var(--c-ink)" strokeWidth="2.5" strokeLinecap="round" vectorEffect="non-scaling-stroke">
+          <title>Spike cut off to keep the rest readable</title>
+        </line>
+      ))}
     </svg>
   );
 }
@@ -169,6 +223,21 @@ export function TrafficChart({
   const chart = useRef<echarts.ECharts | null>(null);
   const dark = useIsDark();
   const rateUnit = useSession().meta.rate_unit ?? "b/s";
+  const [fullScale, setFullScale] = useState(false);
+  const clip = useMemo(() => {
+    const [tin, tout] = stackedRates(layers, seconds);
+    const limIn = spikeLimit(tin);
+    const limOut = spikeLimit(tout);
+    return {
+      tin,
+      tout,
+      limIn,
+      limOut,
+      peakIn: Math.max(0, ...tin),
+      peakOut: Math.max(0, ...tout),
+    };
+  }, [layers, seconds]);
+  const clipping = !fullScale && (clip.limIn !== null || clip.limOut !== null);
 
   useEffect(() => {
     if (!el.current) return;
@@ -231,6 +300,7 @@ export function TrafficChart({
             const ts = items[0].value[0];
             const rows = new Map<string, { name: string; color: string; in: number; out: number }>();
             for (const p of items) {
+              if (!/-(in|out)$/.test(p.seriesId)) continue;
               const key = p.seriesId.replace(/-(in|out)$/, "");
               const layer = layers.find((l) => l.key === key);
               const r = rows.get(key) ?? { name: p.seriesName, color: layer?.color ?? p.color, in: 0, out: 0 };
@@ -262,6 +332,9 @@ export function TrafficChart({
         },
         yAxis: {
           type: "value",
+          // Data stays unclipped (tooltips show real values); only the visible range is limited.
+          max: clipping && clip.limIn !== null ? clip.limIn : undefined,
+          min: clipping && clip.limOut !== null ? -clip.limOut : undefined,
           axisLabel: { color: muted, formatter: (v: number) => bpsAxis(Math.abs(v)) },
           splitLine: { lineStyle: { color: rule, type: [3, 3] } },
           axisLine: { show: false },
@@ -279,13 +352,51 @@ export function TrafficChart({
             tooltip: { show: false },
             z: 10,
           },
+          ...(clipping
+            ? [
+                {
+                  id: "cut",
+                  type: "scatter",
+                  silent: true,
+                  tooltip: { show: false },
+                  symbol: "triangle",
+                  symbolSize: 7,
+                  itemStyle: { color: ink },
+                  z: 11,
+                  data: [
+                    ...(clip.limIn === null ? [] : clip.tin.flatMap((v, i) => (v > clip.limIn! ? [{ value: [times[i], clip.limIn], symbolRotate: 0 }] : []))),
+                    ...(clip.limOut === null ? [] : clip.tout.flatMap((v, i) => (v > clip.limOut! ? [{ value: [times[i], -clip.limOut!], symbolRotate: 180 }] : []))),
+                  ],
+                },
+              ]
+            : []),
         ],
       },
       { notMerge: true },
     );
-  }, [layers, buckets, seconds, dark, rateUnit]);
+  }, [layers, buckets, seconds, dark, rateUnit, clip, clipping]);
 
-  return <div ref={el} style={{ height }} className="w-full" />;
+  const hasSpikes = clip.limIn !== null || clip.limOut !== null;
+  const peaks = [clip.limIn !== null && `in ${bps(clip.peakIn)}`, clip.limOut !== null && `out ${bps(clip.peakOut)}`].filter(Boolean).join(", ");
+  return (
+    <div>
+      <div ref={el} style={{ height }} className="w-full" />
+      {hasSpikes && (
+        <p className="mt-1 flex flex-wrap items-center gap-x-2 text-[12.5px] text-muted">
+          {clipping ? (
+            <span>
+              <span aria-hidden="true">▲▼</span> Short spikes are cut off so the rest stays readable (peak {peaks}).
+            </span>
+          ) : (
+            <span>Showing the full range including spikes (peak {peaks}).</span>
+          )}
+          <button type="button" onClick={() => setFullScale(!fullScale)} className="font-medium text-accent hover:underline">
+            {clipping ? "Show full scale" : "Fit to normal traffic"}
+          </button>
+        </p>
+      )}
+    </div>
+  );
 }
 
 /** Totals of a layer set, for legends. */
