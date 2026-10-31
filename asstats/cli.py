@@ -53,6 +53,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("web", help="run the web UI/API and background jobs")
     sub.add_parser("collector", help="run the NetFlow/IPFIX/sFlow collector")
     sub.add_parser("rollup", help="run rollups and retention once")
+    sub.add_parser("healthcheck", help="container health check for the service this container runs")
     i = sub.add_parser("init", help="create the database schema and the first admin user")
     i.add_argument(
         "--schema-only",
@@ -92,6 +93,10 @@ def main(argv: list[str] | None = None) -> int:
         from .collector.server import main as collector_main
 
         collector_main()
+    elif args.command == "healthcheck":
+        from .health import run as health_run
+
+        return health_run()
     elif args.command == "rollup":
         from .config import get_config
         from .db import get_engine, init_db

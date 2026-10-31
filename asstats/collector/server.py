@@ -12,6 +12,7 @@ from sqlalchemy.exc import InterfaceError, OperationalError
 
 from ..config import get_config
 from ..db import get_engine, init_db
+from ..health import touch_heartbeat
 from .core import Collector, normalize_ip
 
 log = logging.getLogger(__name__)
@@ -102,6 +103,7 @@ async def run() -> None:
             snap, names = collector.take_snapshot()
             try:
                 await asyncio.to_thread(collector.flush, snap, names)
+                touch_heartbeat()  # for the container health check
             except (OperationalError, InterfaceError):
                 # database unreachable, locked or restarting: keep the data and retry
                 log.exception("flush failed, will retry with the next flush")
@@ -130,6 +132,7 @@ async def run() -> None:
             except Exception:
                 log.exception("config reload failed")
 
+    touch_heartbeat()  # listening; the first write follows after one flush interval
     tasks = [asyncio.create_task(flush_loop()), asyncio.create_task(reload_loop())]
     await stop.wait()
     log.info("shutting down collector")
