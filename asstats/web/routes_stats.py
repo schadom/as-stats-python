@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from .. import appsettings
 from ..models import LINK_TRAFFIC, TRAFFIC, AsInfo, Link, PdbIx, PdbIxMember, User
-from ..services import asnames
+from ..services import asnames, prefixes
 from ..services.timeseries import aggregate, ceil_to, choose_step, floor_to, rank_asns, retention, series
 from .deps import current_user, get_db, require_admin
 
@@ -315,6 +315,54 @@ def as_detail(
             }
             for r in ixs
         ],
+    }
+
+
+@router.get("/as/{asn}/prefixes")
+def as_prefixes(
+    asn: int,
+    range: str | None = "24h",
+    start: int | None = None,
+    end: int | None = None,
+    ip: str = "all",
+    links: str | None = None,
+    sort: str = Query("total", pattern="^(total|in|out)$"),
+    limit: int = Query(10, ge=1, le=1000),
+    _: User = Depends(current_user),
+    db: Session = Depends(get_db),
+):
+    """Remote prefixes of one AS, from the optional prefix statistics."""
+    s, e = resolve_range(range, start, end)
+    ip = _ip_param(ip)
+    link_ids = parse_ints(links, "links")
+    conn = db.connection()
+    enabled = bool(appsettings.get_value(conn, "prefix_enabled"))
+    items = prefixes.query_as(conn, asn, s, e, ip, link_ids)
+    other = {"in": 0, "out": 0, "links": {}}
+    listed = []
+    for it in items:
+        if prefixes.is_other(it["prefix"]):
+            other["in"] += it["in"]
+            other["out"] += it["out"]
+            for k, v in it["links"].items():
+                o = other["links"].setdefault(k, {"in": 0, "out": 0})
+                o["in"] += v["in"]
+                o["out"] += v["out"]
+        else:
+            listed.append(it)
+    keyf = {"total": lambda x: x["in"] + x["out"], "in": lambda x: x["in"], "out": lambda x: x["out"]}[sort]
+    listed.sort(key=lambda x: (-keyf(x), x["prefix"]))
+    first = prefixes.first_hour(conn)
+    return {
+        "enabled": enabled,
+        "start": s,
+        "end": e,
+        "step": prefixes.STEP,
+        "first": first,
+        "count": len(listed),
+        "total": {"in": sum(x["in"] for x in items), "out": sum(x["out"] for x in items)},
+        "other": other,
+        "prefixes": listed[:limit],
     }
 
 

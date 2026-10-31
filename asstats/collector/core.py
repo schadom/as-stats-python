@@ -14,6 +14,7 @@ from .. import appsettings
 from ..db import insert_ignore, upsert
 from ..models import (
     LINK_TRAFFIC,
+    PREFIX_TRAFFIC,
     TRAFFIC,
     AsInfo,
     DiscoveredInterface,
@@ -23,13 +24,15 @@ from ..models import (
     LinkInterface,
 )
 from ..ipasn import FILENAME as IPASN_FILE
-from ..ipasn import IpAsnTable, load_binary
+from ..ipasn import IpAsnTable, load_binary, prefix_for
 from .netflow import DecodeError, NetflowDecoder
 from .sflow import SflowDecoder
 
 log = logging.getLogger(__name__)
 
 BUCKET = 300
+PREFIX_BUCKET = 3600
+PREFIX_CACHE_SIZE = 200_000
 
 # Sanity limits. A value outside them means the exporter sent something we
 # misunderstand (or garbage); such flows are dropped with a warning instead of
@@ -82,10 +85,12 @@ def load_linkmap(engine: Engine) -> LinkMap:
 class Snapshot:
     """Counters accumulated between two flushes."""
 
-    __slots__ = ("traffic", "links", "ifaces", "exporters", "started")
+    __slots__ = ("traffic", "links", "prefixes", "ifaces", "exporters", "started")
 
     def __init__(self) -> None:
         self.traffic: dict[tuple[int, int, int], list[int]] = {}
+        # (hour, link, asn, prefix) -> [bytes in, bytes out]; only filled when prefix statistics are on
+        self.prefixes: dict[tuple[int, int, int, str], list[int]] = {}
         self.links: dict[tuple[int, int], list[int]] = {}
         self.ifaces: dict[tuple[str, int], list[int]] = {}
         # ip -> [protocol, version, packets, flows, errors, rejected]
@@ -107,6 +112,8 @@ class Collector:
         self.data_dir = data_dir
         self.ipasn: IpAsnTable | None = None
         self._asn_cache: dict[int | bytes, int] = {}
+        self._prefix_cache: dict[int | bytes, str] = {}
+        self.prefix_enabled = False
         template_file = (data_dir / "templates.json") if data_dir else None
         self.netflow = NetflowDecoder(template_file)
         self.sflow = SflowDecoder()
@@ -133,6 +140,11 @@ class Collector:
     def maybe_reload(self, force: bool = False) -> bool:
         with self.engine.connect() as conn:
             version = appsettings.get_value(conn, appsettings.CONFIG_VERSION, 0)
+            prefix_enabled = bool(appsettings.get_value(conn, "prefix_enabled"))
+        if prefix_enabled != self.prefix_enabled:
+            log.info("prefix statistics %s", "enabled" if prefix_enabled else "disabled")
+            self.prefix_enabled = prefix_enabled
+            self._prefix_cache = {}
         if not force and version == self.config_version:
             return False
         self.linkmap = load_linkmap(self.engine)
@@ -162,6 +174,7 @@ class Collector:
             return False
         self.ipasn = table
         self._asn_cache = {}
+        self._prefix_cache = {}
         return True
 
     def lookup_asn(self, v6: bool, addr: int | bytes | None) -> int:
@@ -175,6 +188,20 @@ class Collector:
                 cache.clear()
             cache[addr] = asn
         return asn
+
+    def lookup_prefix(self, v6: bool, addr: int | bytes) -> str:
+        cache = self._prefix_cache
+        pfx = cache.get(addr)
+        if pfx is None:
+            a = int.from_bytes(addr, "big") if isinstance(addr, (bytes, bytearray)) else addr
+            rng = None
+            if self.ipasn is not None:
+                rng = self.ipasn.range_v6(a) if v6 else self.ipasn.range_v4(a)
+            pfx = prefix_for(a, v6, rng)
+            if len(cache) >= PREFIX_CACHE_SIZE:
+                cache.clear()
+            cache[addr] = pfx
+        return pfx
 
     # ------------------------------------------------------------ packets
 
@@ -230,7 +257,11 @@ class Collector:
         ifaces = snap.ifaces
         traffic = snap.traffic
         links = snap.links
-        bucket = int(time.time()) // BUCKET * BUCKET
+        now = int(time.time())
+        bucket = now // BUCKET * BUCKET
+        prefixes = snap.prefixes if self.prefix_enabled else None
+        hour = now // PREFIX_BUCKET * PREFIX_BUCKET
+        prefix_of = self.lookup_prefix
 
         for flow in flows:
             in_if, out_if, src_as, dst_as, src_peer, dst_peer, nbytes, v6, rate, src_addr, dst_addr = flow
@@ -276,6 +307,12 @@ class Collector:
                 if lookup_all or (lookup_missing and not asn):
                     asn = lookup(v6, src_addr) or asn
                 col = 2 if v6 else 0
+                if prefixes is not None and src_addr is not None:
+                    pkey = (hour, link_id, asn, prefix_of(v6, src_addr))
+                    p = prefixes.get(pkey)
+                    if p is None:
+                        p = prefixes[pkey] = [0, 0]
+                    p[0] += b
                 key = (bucket, link_id, asn)
                 c = traffic.get(key)
                 if c is None:
@@ -295,6 +332,12 @@ class Collector:
                 if lookup_all or (lookup_missing and not asn):
                     asn = lookup(v6, dst_addr) or asn
                 col = 3 if v6 else 1
+                if prefixes is not None and dst_addr is not None:
+                    pkey = (hour, link_id, asn, prefix_of(v6, dst_addr))
+                    p = prefixes.get(pkey)
+                    if p is None:
+                        p = prefixes[pkey] = [0, 0]
+                    p[1] += b
                 key = (bucket, link_id, asn)
                 c = traffic.get(key)
                 if c is None:
@@ -327,6 +370,13 @@ class Collector:
                 else:
                     for i in range(4):
                         cur[i] += vals[i]
+        for key, vals in snap.prefixes.items():
+            cur = self.snap.prefixes.get(key)
+            if cur is None:
+                self.snap.prefixes[key] = vals
+            else:
+                cur[0] += vals[0]
+                cur[1] += vals[1]
         self.snap.started = min(self.snap.started, snap.started)
 
     def flush(self, snap: Snapshot, names: dict[tuple[str, int], str], now: float | None = None) -> None:
@@ -340,6 +390,10 @@ class Collector:
         traffic_rows = [
             {"ts": ts, "link_id": link, "asn": asn, "in_v4": cap(c[0]), "out_v4": cap(c[1]), "in_v6": cap(c[2]), "out_v6": cap(c[3])}
             for (ts, link, asn), c in snap.traffic.items()
+        ]
+        prefix_rows = [
+            {"ts": ts, "link_id": link, "asn": asn, "prefix": pfx, "bytes_in": cap(c[0]), "bytes_out": cap(c[1])}
+            for (ts, link, asn, pfx), c in snap.prefixes.items()
         ]
         link_rows = [
             {"ts": ts, "link_id": link, "in_v4": cap(c[0]), "out_v4": cap(c[1]), "in_v6": cap(c[2]), "out_v6": cap(c[3])}
@@ -402,6 +456,8 @@ class Collector:
         with self.engine.begin() as conn:
             upsert(conn, TRAFFIC[300], traffic_rows, ["ts", "link_id", "asn"], add=("in_v4", "out_v4", "in_v6", "out_v6"))
             upsert(conn, LINK_TRAFFIC[300], link_rows, ["ts", "link_id"], add=("in_v4", "out_v4", "in_v6", "out_v6"))
+            if prefix_rows:
+                upsert(conn, PREFIX_TRAFFIC, prefix_rows, ["asn", "ts", "link_id", "prefix"], add=("bytes_in", "bytes_out"))
             upsert(
                 conn,
                 DiscoveredInterface.__table__,

@@ -11,7 +11,7 @@ from sqlalchemy.engine import Engine
 
 from .. import appsettings
 from ..config import get_config
-from . import asnames, ipasn_sync, peeringdb
+from . import asnames, ipasn_sync, peeringdb, prefixes
 from .rollup import apply_retention, run_rollups
 
 log = logging.getLogger(__name__)
@@ -35,6 +35,7 @@ class Scheduler:
             asyncio.create_task(self._every("asnames", 30, 10, self._asnames, self.names_now)),
             asyncio.create_task(self._every("peeringdb", 300, 20, self._peeringdb, self.pdb_now)),
             asyncio.create_task(self._every("ipasn", 600, 3, self._ipasn)),
+            asyncio.create_task(self._every("prefixes", 300, 30, self._prefixes)),
         ]
 
     async def stop(self) -> None:
@@ -76,6 +77,11 @@ class Scheduler:
 
     async def _retention(self) -> None:
         await asyncio.to_thread(apply_retention, self.engine)
+        await asyncio.to_thread(prefixes.apply_retention, self.engine)
+
+    async def _prefixes(self) -> None:
+        # also runs while the feature is off, so data collected before switching it off is still compacted
+        await asyncio.to_thread(prefixes.run_compaction, self.engine)
 
     async def _asnames(self) -> None:
         # keep going while there is a backlog (first start sees thousands of ASes)

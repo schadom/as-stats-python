@@ -18,6 +18,7 @@ receive how much traffic over which of my links?
   and you turn one into a link with a click. Changes are picked up within seconds, without a restart.
 - **Top AS** with mirrored per-link sparklines (inbound above the line, outbound below), filters for time range, IPv4/IPv6 and links.
 - **AS detail** pages with interactive charts per link or per IP version, per-link totals and shared IX presence.
+  Optionally, the remote prefixes of the AS your network talked to (prefix statistics, off by default).
 - **Links** overview: all links stacked, and which ASes use each link.
 - **Internet exchanges** from PeeringDB: the IXs your AS is present at, with traffic per member. Useful for finding peering candidates you currently reach over transit.
 - **AS names** looked up automatically through the RIPEstat API (all RIRs), with country, PeeringDB names and your own overrides.
@@ -201,6 +202,21 @@ the sFlow extended gateway path). The IP lookup always yields the origin AS.
 Traffic is stored in 5 minute buckets by arrival time. Completed hours and days are rolled up into hourly and daily
 tables, and queries combine them automatically. Default retention: 3 days at 5 minutes, 90 days hourly, 5 years daily,
 changeable under **General**.
+
+### Prefix statistics (optional)
+
+Turned on under **General → Prefix statistics** (off by default). The collector then also records, per hour and link,
+the remote prefix of every counted flow, and each AS page lists the prefixes your network talked to, with volume,
+share, the links used and a link to bgp.tools.
+
+- Prefixes come from the IP-to-AS dataset: the announced range holding the address, as a CIDR block. Addresses
+  outside the dataset are grouped by /24 (IPv4) or /48 (IPv6). Flows need IP addresses, which NetFlow v9, IPFIX and
+  sFlow carry; NetFlow v5 does too.
+- After each hour, only the biggest prefixes of every AS are kept (50 by default) and only if they moved at least
+  1 MB; the rest is summed up as "Other prefixes". Prefix data has its own retention (30 days by default).
+- Expect roughly 2 to 3 times the disk space of the hourly AS data. The settings page shows the current size and has
+  a button to delete all prefix data.
+- Switching it on or off takes effect within seconds, without a restart. Prefix data starts when it is switched on.
 
 ## Migrating from AS-Stats
 

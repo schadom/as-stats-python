@@ -40,7 +40,7 @@ RATE_UNITS = ("b/s", "bit/s")
 
 @router.get("/meta")
 def meta(user: User = Depends(current_user), db: Session = Depends(get_db)):
-    s = appsettings.get_many(db, ["site_name", "my_asn", "top_default_limit", "rate_unit"])
+    s = appsettings.get_many(db, ["site_name", "my_asn", "top_default_limit", "rate_unit", "prefix_enabled"])
     links = db.execute(select(Link).order_by(Link.sort_order, Link.name)).scalars().all()
     return {
         "version": __version__,
@@ -48,6 +48,7 @@ def meta(user: User = Depends(current_user), db: Session = Depends(get_db)):
         "my_asn": s["my_asn"],
         "top_default_limit": s["top_default_limit"],
         "rate_unit": s["rate_unit"] if s["rate_unit"] in RATE_UNITS else "b/s",
+        "prefix_enabled": bool(s["prefix_enabled"]),
         "links": [
             {
                 "id": l.id,
@@ -85,6 +86,10 @@ class SettingsIn(BaseModel):
     peeringdb_api_key: str | None = Field(default=None, max_length=128)
     top_default_limit: int | None = Field(default=None, ge=5, le=200)
     rate_unit: Literal["b/s", "bit/s"] | None = None
+    prefix_enabled: bool | None = None
+    prefix_retention_days: int | None = Field(default=None, ge=1, le=3650)
+    prefix_min_mb_hour: float | None = Field(default=None, ge=0, le=100_000)
+    prefix_max_per_as: int | None = Field(default=None, ge=1, le=1000)
     ipasn_enabled: bool | None = None
     ipasn_url: str | None = Field(default=None, max_length=512, pattern=r"^https?://")
 
@@ -486,3 +491,22 @@ async def ipasn_refresh(_: User = Depends(require_admin)):
         return await ipasn_sync.refresh(get_engine(), get_config().data_dir, force=True)
     except Exception as exc:
         raise HTTPException(502, f"download failed: {exc}") from exc
+
+
+# ---------------------------------------------------------------- prefix statistics
+
+
+@router.get("/prefixes/info")
+def prefixes_info(_: User = Depends(require_admin), db: Session = Depends(get_db)):
+    from ..services import prefixes
+
+    conn = db.connection()
+    return {"rows": prefixes.table_rows(conn), "first": prefixes.first_hour(conn)}
+
+
+@router.delete("/prefixes")
+def prefixes_purge(_: User = Depends(require_admin)):
+    from ..db import get_engine
+    from ..services import prefixes
+
+    return {"deleted": prefixes.purge(get_engine())}

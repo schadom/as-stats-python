@@ -252,3 +252,19 @@ def _link_traffic_table(step: int) -> Table:
 
 TRAFFIC: dict[int, Table] = {step: _traffic_table(step) for step in STEPS}
 LINK_TRAFFIC: dict[int, Table] = {step: _link_traffic_table(step) for step in STEPS}
+
+# Optional prefix statistics (setting "prefix_enabled", off by default): bytes per
+# (hour, link, AS, remote prefix). The collector writes it directly in hourly
+# buckets; after each hour the scheduler folds small prefixes into one "other"
+# row per family (see services/prefixes.py). Older versions simply ignore it.
+PREFIX_TRAFFIC = Table(
+    "prefix_traffic_1h",
+    Base.metadata,
+    Column("asn", BigInteger, primary_key=True, autoincrement=False),
+    Column("ts", Integer, primary_key=True, autoincrement=False),
+    Column("link_id", Integer, primary_key=True, autoincrement=False),
+    Column("prefix", String(43), primary_key=True),
+    Column("bytes_in", BigInteger, nullable=False, default=0),
+    Column("bytes_out", BigInteger, nullable=False, default=0),
+    Index("ix_prefix_traffic_1h_ts", "ts"),
+)
