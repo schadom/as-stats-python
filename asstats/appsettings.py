@@ -32,6 +32,8 @@ DEFAULTS: dict[str, Any] = {
     "prefix_retention_days": 30,
     "prefix_min_mb_hour": 1,
     "prefix_max_per_as": 50,
+    # Do not count flows whose remote address is private, link-local, multicast etc.
+    "ignore_non_internet": True,
     "ipasn_enabled": True,
     "ipasn_url": "https://iptoasn.com/data/ip2asn-combined.tsv.gz",
 }

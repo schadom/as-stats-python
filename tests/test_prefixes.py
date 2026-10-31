@@ -21,7 +21,7 @@ FLOWS = [
     Flow(10, 99, 0, 0, 1000, src_ip="8.8.8.8", dst_ip="192.0.2.7"),   # in from Google, /24 from the table
     Flow(10, 99, 0, 0, 500, src_ip="8.8.8.9", dst_ip="192.0.2.8"),    # same prefix
     Flow(99, 10, 0, 0, 300, src_ip="192.0.2.7", dst_ip="1.1.1.1"),    # out to Cloudflare
-    Flow(10, 99, 0, 0, 40, src_ip="203.0.113.9", dst_ip="192.0.2.7"),  # not in the table: /24 fallback, AS 0
+    Flow(10, 99, 0, 0, 40, src_ip="193.203.0.9", dst_ip="192.0.2.7"),  # IX LAN, not in the table: /24 fallback, AS 0
 ]
 
 
@@ -64,7 +64,7 @@ def test_collects_prefixes_when_enabled(engine, tmp_path):
     assert prefix_rows(engine) == {
         (transit, 15169, "8.8.8.0/24"): (1500, 0),
         (transit, 13335, "1.1.1.0/24"): (0, 300),
-        (transit, 0, "203.0.113.0/24"): (40, 0),
+        (transit, 0, "193.203.0.0/24"): (40, 0),
     }
     hours = {r[0] for r in engine.connect().execute(select(PREFIX_TRAFFIC.c.ts))}
     assert all(h % 3600 == 0 for h in hours)

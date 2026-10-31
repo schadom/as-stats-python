@@ -119,6 +119,18 @@ export default function SettingsGeneral() {
                 <option value="bit/s">Mbit/s (long)</option>
               </Select>
             </Field>
+            <div>
+              <Toggle
+                checked={s.ignore_non_internet ?? true}
+                onChange={(v) => set({ ignore_non_internet: v })}
+                label="Ignore traffic with non-internet addresses"
+              />
+              <p className="mt-1 text-[12.5px] text-muted">
+                Flows whose remote address is private (RFC 1918, CGNAT, ULA), link-local, multicast or reserved are not counted. They are router
+                housekeeping such as IPv6 neighbor discovery or link-local BGP sessions. Your own side may still use private addresses. IX peering LANs
+                are public and still counted.
+              </p>
+            </div>
           </div>
         </Panel>
 

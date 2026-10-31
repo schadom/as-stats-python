@@ -256,6 +256,8 @@ export interface Settings {
   peeringdb_api_key: string;
   top_default_limit: number;
   rate_unit: RateUnit;
+  /** Missing on servers older than this frontend: treat as on. */
+  ignore_non_internet?: boolean;
   prefix_enabled: boolean;
   prefix_retention_days: number;
   prefix_min_mb_hour: number;
@@ -272,6 +274,7 @@ export interface Status {
     flows_per_sec: number;
     exporters: number;
     missing_template: number;
+    ignored_per_sec?: number;
     ipasn_ranges?: number;
     ipasn_mtime?: number | null;
   } | null;
