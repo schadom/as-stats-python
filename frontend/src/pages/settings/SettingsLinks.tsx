@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { del, get, post, put, type Discovered, type Exporter, type LinkFull, type LinkIface } from "../../api";
+import { del, get, post, put, type Discovered, type Exporter, type LinkFull, type LinkIface, type LinkType } from "../../api";
 import { Badge, Button, Empty, ErrorNote, Field, Input, LinkDot, Loading, Modal, PageHeader, Panel, Select, Toggle, cx, td, th } from "../../components/ui";
 import { ago, bps, speed } from "../../format";
 import { ExporterModal } from "./SettingsExporters";
@@ -24,8 +24,16 @@ interface Draft {
   sort_order: number;
   enabled: boolean;
   capacity_mbit?: number | null;
+  link_type?: LinkType;
   interfaces: LinkIface[];
 }
+
+export const LINK_TYPES: { id: LinkType; label: string }[] = [
+  { id: "transit", label: "Transit" },
+  { id: "ix", label: "Internet exchange (IX)" },
+  { id: "pni", label: "Private interconnect (PNI)" },
+  { id: "other", label: "Other" },
+];
 
 function invalidateAll(qc: ReturnType<typeof useQueryClient>) {
   qc.invalidateQueries({ queryKey: ["links-full"] });
@@ -47,6 +55,7 @@ export function LinkEditor({ draft, exporters, onClose }: { draft: Draft; export
         sort_order: d.sort_order,
         enabled: d.enabled,
         capacity_mbit: d.capacity_mbit || null,
+        link_type: d.link_type ?? "other",
         interfaces: d.interfaces.map((i) => ({ exporter_id: i.exporter_id, ifindex: i.ifindex, sampling_rate: i.sampling_rate || null })),
       };
       return d.id ? put(`/links/${d.id}`, body) : post("/links", body);
@@ -122,6 +131,13 @@ export function LinkEditor({ draft, exporters, onClose }: { draft: Draft; export
         <div className="pt-6">
           <Toggle checked={d.enabled} onChange={(v) => set({ enabled: v })} label="Count traffic on this link" />
         </div>
+        <Field label="Link type" hint="Used by Routing symmetry to tell peering from transit.">
+          <Select value={d.link_type ?? "other"} onChange={(e) => set({ link_type: e.target.value as LinkType })}>
+            {LINK_TYPES.map((t) => (
+              <option key={t.id} value={t.id}>{t.label}</option>
+            ))}
+          </Select>
+        </Field>
         <div>
           <label htmlFor="link-capacity" className="mb-1 block text-[13px] font-medium text-ink-2">
             Capacity
@@ -345,6 +361,7 @@ export default function SettingsLinks() {
                     <span className="text-[13px] text-muted">{l.tag}</span>
                     {!l.enabled && <Badge tone="warn">Paused</Badge>}
                     {l.capacity_mbit ? <Badge>{speed(l.capacity_mbit)}</Badge> : null}
+                    {l.link_type && l.link_type !== "other" ? <Badge tone="accent">{l.link_type === "transit" ? "Transit" : l.link_type.toUpperCase()}</Badge> : null}
                   </div>
                   <div className="mt-1 flex flex-wrap gap-1.5">
                     {l.interfaces.length === 0 && <span className="text-[13px] text-warn">No interfaces, nothing is counted</span>}

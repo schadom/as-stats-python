@@ -9,6 +9,7 @@ import { ErrorNote, Loading } from "./components/ui";
 import AsDetail from "./pages/AsDetail";
 import { Account, ForcePasswordChange, Login } from "./pages/Auth";
 import Ix from "./pages/Ix";
+import Symmetry from "./pages/Symmetry";
 import Links from "./pages/Links";
 import Status from "./pages/Status";
 import TopAS from "./pages/TopAS";
@@ -45,6 +46,7 @@ function Authenticated({ user }: { user: User }) {
           <Route path="links" element={<Links />} />
           <Route path="ix" element={<Ix />} />
           <Route path="ix/:id" element={<Ix />} />
+          <Route path="symmetry" element={<Symmetry />} />
           <Route path="status" element={<Status />} />
           <Route path="account" element={<Account />} />
           <Route path="settings/links" element={<AdminOnly><SettingsLinks /></AdminOnly>} />

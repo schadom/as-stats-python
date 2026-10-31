@@ -58,6 +58,7 @@ def meta(user: User = Depends(current_user), db: Session = Depends(get_db)):
                 "enabled": l.enabled,
                 "sort_order": l.sort_order,
                 "capacity_mbit": l.capacity_mbit,
+                "link_type": l.link_type or "other",
             }
             for l in links
         ],
@@ -208,6 +209,8 @@ class LinkIn(BaseModel):
     enabled: bool = True
     # Mbit/s; leaving it out keeps the stored value, null clears it.
     capacity_mbit: int | None = Field(default=None, ge=1, le=100_000_000)
+    # leaving it out keeps the stored value
+    link_type: Literal["transit", "ix", "pni", "other"] | None = None
     interfaces: list[LinkInterfaceIn] = []
 
     @field_validator("tag")
@@ -235,6 +238,7 @@ def link_out(link: Link, names: dict[tuple[str, int], str | None] | None = None)
         "sort_order": link.sort_order,
         "enabled": link.enabled,
         "capacity_mbit": link.capacity_mbit,
+        "link_type": link.link_type or "other",
         "interfaces": [
             {
                 "id": i.id,
@@ -301,6 +305,8 @@ def _apply_link(db: Session, link: Link, body: LinkIn) -> None:
     link.enabled = body.enabled
     if "capacity_mbit" in body.model_fields_set:
         link.capacity_mbit = body.capacity_mbit
+    if body.link_type is not None:
+        link.link_type = body.link_type
     existing = {(i.exporter_id, int(i.ifindex)): i for i in link.interfaces}
     wanted = {(i.exporter_id, i.ifindex): i for i in body.interfaces}
     for key, iface in existing.items():

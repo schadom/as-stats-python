@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from .. import appsettings
 from ..models import LINK_TRAFFIC, TRAFFIC, AsInfo, Link, PdbIx, PdbIxMember, User
-from ..services import asnames, prefixes
+from ..services import asnames, prefixes, symmetry
 from ..services.timeseries import aggregate, ceil_to, choose_step, floor_to, rank_asns, retention, series
 from .deps import current_user, get_db, require_admin
 
@@ -363,6 +363,65 @@ def as_prefixes(
         "total": {"in": sum(x["in"] for x in items), "out": sum(x["out"] for x in items)},
         "other": other,
         "prefixes": listed[:limit],
+    }
+
+
+@router.get("/symmetry")
+def routing_symmetry(
+    range: str | None = "24h",
+    start: int | None = None,
+    end: int | None = None,
+    ip: str = "all",
+    min_mb: float = Query(100, ge=0, le=10_000_000),
+    asn: int | None = None,
+    _: User = Depends(current_user),
+    db: Session = Depends(get_db),
+):
+    """Which links each AS's traffic arrives on compared with the links it leaves on.
+
+    All links are always considered (the link filter would distort the shares).
+    """
+    s, e = resolve_range(range, start, end)
+    ip = _ip_param(ip)
+    conn = db.connection()
+    types = {l.id: (l.link_type or "other") for l in db.execute(select(Link)).scalars()}
+    types_set = any(t in ("transit", "ix", "pni") for t in types.values())
+    rows = [
+        (int(r["asn"]), int(r["link_id"]), *_dir(r, ip))
+        for r in aggregate(conn, TRAFFIC, s, e, ["asn", "link_id"], asns=[asn] if asn is not None else None)
+    ]
+    results = symmetry.analyze(rows, types, int(min_mb * 1_000_000))
+    mismatches = [r for r in results if r.kind.startswith("in_")]
+    since = {r.asn: symmetry.mismatch_since(conn, r.asn, r.kind, types, ip, e) for r in mismatches[:100]}
+    meta = as_meta(db, [r.asn for r in results])
+    return {
+        "start": s,
+        "end": e,
+        "min_mb": min_mb,
+        "types_set": types_set,
+        "summary": {
+            "mismatches": len(mismatches),
+            "affected": sum(r.inbound + r.outbound for r in mismatches),
+            "asymmetric": sum(1 for r in results if r.kind == "asymmetric"),
+            "symmetric_peering": sum(1 for r in results if r.kind == "ok" and r.peering_in >= 0.5 and r.peering_out >= 0.5),
+            "compared": len(results),
+        },
+        "items": [
+            {
+                "asn": r.asn,
+                **meta[r.asn],
+                "kind": r.kind,
+                "score": r.score,
+                "in": r.inbound,
+                "out": r.outbound,
+                "in_links": {str(k): v for k, v in r.in_links.items()},
+                "out_links": {str(k): v for k, v in r.out_links.items()},
+                "peering_in": r.peering_in,
+                "peering_out": r.peering_out,
+                "since": since.get(r.asn),
+            }
+            for r in results
+        ],
     }
 
 

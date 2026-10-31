@@ -106,6 +106,7 @@ def wait_for_db(timeout: float = 120.0) -> None:
 ADDED_COLUMNS = [
     ("exporters", "as_source", "VARCHAR(8) NOT NULL DEFAULT 'auto'"),
     ("links", "capacity_mbit", "INTEGER NULL"),
+    ("links", "link_type", "VARCHAR(8) NOT NULL DEFAULT 'other'"),
 ]
 
 

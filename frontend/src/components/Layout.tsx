@@ -3,6 +3,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { get, post, type SearchHit } from "../api";
 import { navQuery, useFilters, useSession, useTheme } from "../state";
+import { useSymmetry } from "../symmetry";
 import { TimeRangeSelect } from "./TimeRangeSelect";
 import { cx, LinkDot, Segmented } from "./ui";
 
@@ -23,12 +24,13 @@ const ICONS = {
   users: "M7 9a3 3 0 100-6 3 3 0 000 6zM2 17c0-3 2.2-5 5-5s5 2 5 5M13.5 4a3 3 0 010 5.5M15 12.2c1.8.6 3 2.4 3 4.8",
   general: "M10 12.5a2.5 2.5 0 100-5 2.5 2.5 0 000 5zM10 2v2M10 16v2M3.5 3.5l1.4 1.4M15.1 15.1l1.4 1.4M2 10h2M16 10h2M3.5 16.5l1.4-1.4M15.1 4.9l1.4-1.4",
   status: "M2 10h3l2-5 3 10 2-6 2 3h4",
+  symmetry: "M3 7h11l-3-3M17 13H6l3 3",
 };
 
-function NavItem({ to, icon, children, end, onNavigate }: { to: string; icon: keyof typeof ICONS; children: ReactNode; end?: boolean; onNavigate?: () => void }) {
+function NavItem({ to, icon, children, end, onNavigate, badge }: { to: string; icon: keyof typeof ICONS; children: ReactNode; end?: boolean; onNavigate?: () => void; badge?: ReactNode }) {
   const loc = useLocation();
   // carry the global filters between the stats pages
-  const keep = ["/", "/links", "/ix"].includes(to) ? loc.search : "";
+  const keep = ["/", "/links", "/ix", "/symmetry"].includes(to) ? loc.search : "";
   return (
     <NavLink
       to={to + keep}
@@ -43,6 +45,7 @@ function NavItem({ to, icon, children, end, onNavigate }: { to: string; icon: ke
     >
       <Icon d={ICONS[icon]} />
       {children}
+      {badge}
     </NavLink>
   );
 }
@@ -131,7 +134,7 @@ function Search() {
   );
 }
 
-export function FilterBar({ extra }: { extra?: ReactNode }) {
+export function FilterBar({ extra, noLinks }: { extra?: ReactNode; noLinks?: boolean }) {
   const { meta } = useSession();
   const [f, setF] = useFilters();
   const links = meta.links.filter((l) => l.enabled);
@@ -153,7 +156,7 @@ export function FilterBar({ extra }: { extra?: ReactNode }) {
         ]}
         onChange={(ip) => setF({ ip })}
       />
-      {links.length > 1 && (
+      {links.length > 1 && !noLinks && (
         <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Links">
           {links.map((l) => {
             const on = f.links.length === 0 || f.links.includes(l.id);
@@ -203,11 +206,31 @@ export function Layout() {
   };
 
   const close = () => setMenu(false);
+  // open IX vs transit mismatches over the last 24 hours, as a badge in the sidebar
+  const typed = meta.links.some((l) => l.link_type && l.link_type !== "other");
+  const sym = useSymmetry({ range: "24h", ip: "all" }, {}, typed);
+  const mismatches = sym.data?.summary.mismatches ?? 0;
   const nav = (
     <nav className="flex flex-col gap-0.5" aria-label="Main">
       <NavItem to="/" icon="top" end onNavigate={close}>Top AS</NavItem>
       <NavItem to="/links" icon="links" onNavigate={close}>Links</NavItem>
       {(meta.has_ix || meta.my_asn) && <NavItem to="/ix" icon="ix" onNavigate={close}>Internet exchanges</NavItem>}
+      {meta.links.length > 0 && (
+        <NavItem
+          to="/symmetry"
+          icon="symmetry"
+          onNavigate={close}
+          badge={
+            mismatches > 0 ? (
+              <span className="ml-auto rounded-full bg-warn/15 px-1.5 text-[12px] font-semibold text-warn num" title={`${mismatches} IX vs transit mismatches in the last 24 hours`}>
+                {mismatches}
+              </span>
+            ) : null
+          }
+        >
+          Routing symmetry
+        </NavItem>
+      )}
       <NavItem to="/status" icon="status" onNavigate={close}>Collector status</NavItem>
       {isAdmin && (
         <>
